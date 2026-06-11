@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#f4f0e7" />
+  <title>NeuroMentor AI</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png" />
+  <link rel="apple-touch-icon" sizes="192x192" href="assets/neurommentor-logo-192.png" />
+  <link rel="manifest" href="site.webmanifest" />
+  <script src="runtime.js"></script>
+  <script src="config.js"></script>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <section id="auth-view" class="auth-view" aria-labelledby="auth-title">
+    <div class="auth-orbit auth-orbit-one" aria-hidden="true"></div>
+    <div class="auth-orbit auth-orbit-two" aria-hidden="true"></div>
+
+    <div class="auth-brand">
+      <img
+        class="brand-logo auth-brand-logo"
+        src="assets/neurommentor-logo-192.png"
+        alt=""
+        aria-hidden="true"
+      />
+      <p class="eyebrow">NeuroMentor AI</p>
+    </div>
+
+    <div class="auth-copy">
+      <span class="auth-kicker">A calmer relationship with your screen</span>
+      <h1 id="auth-title">Know your patterns.<br />Protect your attention.</h1>
+      <p>Turn daily screen time into private, practical coaching that follows you across sessions.</p>
+    </div>
+
+    <div class="auth-card">
+      <div class="auth-tabs" role="tablist" aria-label="Account access">
+        <button id="show-login" class="auth-tab active" type="button" role="tab" aria-selected="true">
+          Log in
+        </button>
+        <button id="show-signup" class="auth-tab" type="button" role="tab" aria-selected="false">
+          Sign up
+        </button>
+      </div>
+
+      <form id="login-form" class="auth-form">
+        <label>
+          <span>Email</span>
+          <input id="login-email" type="email" autocomplete="email" placeholder="you@example.com" required />
+        </label>
+        <label>
+          <span>Password</span>
+          <input
+            id="login-password"
+            type="password"
+            autocomplete="current-password"
+            placeholder="Your password"
+            required
+          />
+        </label>
+        <button id="login-button" class="primary-button" type="submit">Enter NeuroMentor</button>
+      </form>
+
+      <form id="signup-form" class="auth-form hidden">
+        <label>
+          <span>Email</span>
+          <input id="signup-email" type="email" autocomplete="email" placeholder="you@example.com" required />
+        </label>
+        <label>
+          <span>Password</span>
+          <input
+            id="signup-password"
+            type="password"
+            minlength="8"
+            maxlength="128"
+            autocomplete="new-password"
+            placeholder="At least 8 characters"
+            required
+          />
+        </label>
+        <label>
+          <span>Confirm password</span>
+          <input
+            id="signup-confirm"
+            type="password"
+            minlength="8"
+            maxlength="128"
+            autocomplete="new-password"
+            placeholder="Repeat your password"
+            required
+          />
+        </label>
+        <button id="signup-button" class="primary-button" type="submit">Create my account</button>
+      </form>
+
+      <p id="auth-status" class="auth-status" aria-live="polite"></p>
+      <button id="offline-button" class="offline-button" type="button">
+        Continue offline
+        <span>No account or server needed</span>
+      </button>
+    </div>
+
+    <p class="auth-privacy">Your screenshots are read locally and never uploaded.</p>
+  </section>
+
+  <div id="app-shell" class="app-shell hidden">
+    <header class="topbar">
+      <div class="brand">
+        <img
+          class="brand-logo"
+          src="assets/neurommentor-logo-192.png"
+          alt=""
+          aria-hidden="true"
+        />
+        <div>
+          <p class="brand-name">NeuroMentor AI</p>
+          <p class="brand-tagline">Your cognitive wellness copilot.</p>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <div id="engine-status" class="engine-status" title="Analysis engine status">
+          <span class="status-dot"></span>
+          <span>Local</span>
+        </div>
+        <button id="account-button" class="account-button" type="button" aria-label="Open account">
+          <span id="account-avatar">?</span>
+        </button>
+      </div>
+    </header>
+
+    <nav class="tabbar" aria-label="NeuroMentor sections">
+      <button class="tab-button active" type="button" data-screen-target="overview">Overview</button>
+      <button class="tab-button" type="button" data-screen-target="analyze">Analyze</button>
+      <button class="tab-button" type="button" data-screen-target="trends">Trends</button>
+      <button class="tab-button" type="button" data-screen-target="mentor">Mentor</button>
+    </nav>
+
+    <section id="account-panel" class="account-panel hidden" aria-label="Account">
+      <div class="account-heading">
+        <div id="account-avatar-large" class="account-avatar-large">?</div>
+        <div>
+          <p class="eyebrow">Your account</p>
+          <strong id="account-email">Offline workspace</strong>
+          <span id="account-member-since">Stored only on this device</span>
+        </div>
+        <button id="close-account" class="panel-close" type="button" aria-label="Close account panel">X</button>
+      </div>
+      <div class="account-sync">
+        <span class="status-dot"></span>
+        <div>
+          <strong id="account-sync-title">Local mode</strong>
+          <p id="account-sync-status">Your analysis remains in this browser.</p>
+        </div>
+      </div>
+      <div class="reminder-settings">
+        <div class="reminder-heading">
+          <div>
+            <strong>Daily email check-in</strong>
+            <p id="reminder-status">Sign in to configure email reminders.</p>
+          </div>
+          <label class="toggle-control" aria-label="Enable daily email reminder">
+            <input id="reminder-enabled" type="checkbox" />
+            <span class="toggle-track" aria-hidden="true"></span>
+          </label>
+        </div>
+        <div class="reminder-time-row">
+          <label for="reminder-time">Reminder time</label>
+          <input id="reminder-time" type="time" value="20:00" />
+        </div>
+        <a
+          id="reminder-setup"
+          class="reminder-setup hidden"
+          href="https://resend.com/signup"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Set up email delivery
+        </a>
+        <button id="test-reminder" class="reminder-test" type="button">Send test email</button>
+      </div>
+      <button id="account-action" class="account-action" type="button">Log in or create account</button>
+    </section>
+
+    <main class="screen-stack">
+      <section id="screen-overview" class="screen active" data-screen="overview">
+        <div class="welcome-row">
+          <div>
+            <p id="greeting" class="eyebrow">Good day</p>
+            <h1>How is your attention doing?</h1>
+          </div>
+          <button class="text-button" type="button" data-screen-target="analyze">Update today</button>
+        </div>
+
+        <article class="score-card">
+          <div id="focus-ring" class="score-ring" style="--score: 0">
+            <div class="score-ring-inner">
+              <strong id="focus-score">0</strong>
+              <span>/100 focus</span>
+            </div>
+          </div>
+          <div class="score-copy">
+            <span id="focus-label" class="state-chip neutral">No baseline</span>
+            <h2 id="score-headline">Add today's usage to build your cognitive snapshot.</h2>
+            <p id="score-explanation">
+              NeuroMentor uses screen-time metadata, not message or page content.
+            </p>
+          </div>
+        </article>
+
+        <div class="metric-grid" aria-label="Cognitive wellness metrics">
+          <article class="metric-card">
+            <span class="metric-label">Mental fatigue</span>
+            <strong id="fatigue-score">0</strong>
+            <span id="fatigue-label" class="metric-detail">Not measured</span>
+          </article>
+          <article class="metric-card">
+            <span class="metric-label">Distraction</span>
+            <strong id="distraction-score">0</strong>
+            <span id="distraction-label" class="metric-detail">Not measured</span>
+          </article>
+          <article class="metric-card accent-card">
+            <span class="metric-label">Burnout tendency</span>
+            <strong id="burnout-risk">Low</strong>
+            <span id="burnout-score" class="metric-detail">0 / 100</span>
+          </article>
+          <article class="metric-card">
+            <span class="metric-label">Productive ratio</span>
+            <strong id="productive-ratio">0%</strong>
+            <span class="metric-detail">Work + learning</span>
+          </article>
+        </div>
+
+        <article class="content-card">
+          <div class="card-heading">
+            <div>
+              <p class="eyebrow">Today's breakdown</p>
+              <h2>Where your screen time went</h2>
+            </div>
+            <span id="total-time" class="compact-stat">0 min</span>
+          </div>
+          <div id="usage-breakdown" class="usage-breakdown"></div>
+        </article>
+
+        <article class="content-card insight-card">
+          <div class="card-heading">
+            <div>
+              <p class="eyebrow">Explainable insight</p>
+              <h2>What shaped your score</h2>
+            </div>
+          </div>
+          <ul id="insight-list" class="insight-list">
+            <li>Complete an analysis to reveal your strongest behavioral signals.</li>
+          </ul>
+        </article>
+
+        <article id="alert-card" class="alert-card hidden">
+          <span id="alert-severity" class="alert-severity">Watch</span>
+          <div>
+            <h2 id="alert-title">Attention signal</h2>
+            <p id="alert-message"></p>
+            <p id="alert-reason" class="alert-reason"></p>
+          </div>
+        </article>
+
+        <article class="recommendation-card">
+          <div>
+            <p class="eyebrow">Recommended next move</p>
+            <h2 id="recommendation-title">Create your first baseline</h2>
+            <p id="recommendation-text">
+              Enter today's app usage and optional behavior signals to get a focused intervention.
+            </p>
+          </div>
+          <button class="primary-button compact-button" type="button" data-screen-target="analyze">
+            Analyze today
+          </button>
+        </article>
+      </section>
+
+      <section id="screen-analyze" class="screen" data-screen="analyze">
+        <div class="section-intro">
+          <p class="eyebrow">Behavior snapshot</p>
+          <h1>Turn usage into a useful signal.</h1>
+          <p>
+            Add category totals from Screen Time or Digital Wellbeing. Optional context improves
+            confidence and makes the recommendations more specific.
+          </p>
+        </div>
+
+        <details class="import-panel">
+          <summary>
+            <span>
+              <strong>Import a screenshot</strong>
+              <small>Upload or paste Screen Time data</small>
+            </span>
+            <span class="summary-action">Open</span>
+          </summary>
+          <div class="import-body">
+            <div class="import-actions">
+              <label class="upload-button" for="screenshot-input">
+                <input id="screenshot-input" type="file" accept="image/*" hidden />
+                Choose image
+              </label>
+              <div id="paste-zone" class="paste-zone" tabindex="0" role="region">
+                <kbd>Ctrl+V</kbd>
+                <span>Paste screenshot</span>
+              </div>
+            </div>
+            <p id="ocr-status" class="import-status">
+              OCR runs locally when supported by this Chrome build. Always review detected values.
+            </p>
+            <img id="screenshot-preview" class="screenshot-preview hidden" alt="Uploaded screen-time screenshot" />
+            <div id="ocr-matches" class="ocr-matches hidden"></div>
+          </div>
+        </details>
+
+        <form id="analysis-form" class="analysis-form">
+          <article class="content-card">
+            <div class="card-heading">
+              <div>
+                <p class="eyebrow">Minutes by category</p>
+                <h2>Today's screen time</h2>
+              </div>
+              <span class="compact-stat">minutes</span>
+            </div>
+            <div class="input-grid">
+              <label class="usage-input social">
+                <span>Social</span>
+                <small>Feeds and messaging</small>
+                <input id="social" name="social" type="number" min="0" max="1440" value="0" />
+              </label>
+              <label class="usage-input productivity">
+                <span>Productivity</span>
+                <small>Work and planning</small>
+                <input id="productivity" name="productivity" type="number" min="0" max="1440" value="0" />
+              </label>
+              <label class="usage-input games">
+                <span>Games</span>
+                <small>Mobile and desktop games</small>
+                <input id="games" name="games" type="number" min="0" max="1440" value="0" />
+              </label>
+              <label class="usage-input learning">
+                <span>Learning</span>
+                <small>Study, reading, courses</small>
+                <input id="learning" name="learning" type="number" min="0" max="1440" value="0" />
+              </label>
+              <label class="usage-input health">
+                <span>Health</span>
+                <small>Fitness and recovery</small>
+                <input id="health" name="health" type="number" min="0" max="1440" value="0" />
+              </label>
+              <label class="usage-input entertainment">
+                <span>Entertainment</span>
+                <small>Video, music, streaming</small>
+                <input id="entertainment" name="entertainment" type="number" min="0" max="1440" value="0" />
+              </label>
+            </div>
+          </article>
+
+          <article class="content-card">
+            <div class="card-heading">
+              <div>
+                <p class="eyebrow">Optional context</p>
+                <h2>Improve the estimate</h2>
+              </div>
+              <span class="compact-stat">metadata only</span>
+            </div>
+            <div class="context-grid">
+              <label>
+                <span>App switches</span>
+                <input id="app-switches" name="app_switches" type="number" min="0" max="10000" value="0" />
+              </label>
+              <label>
+                <span>Late-night minutes</span>
+                <input id="late-night-minutes" name="late_night_minutes" type="number" min="0" max="1440" value="0" />
+              </label>
+              <label>
+                <span>Deep-work minutes</span>
+                <input id="deep-work-minutes" name="deep_work_minutes" type="number" min="0" max="1440" value="0" />
+              </label>
+              <label>
+                <span>App launches</span>
+                <input id="launch-count" name="launch_count" type="number" min="0" max="10000" value="0" />
+              </label>
+            </div>
+          </article>
+
+          <button id="analyze-button" class="primary-button" type="submit">
+            Generate cognitive snapshot
+          </button>
+          <p id="analysis-status" class="form-status" aria-live="polite"></p>
+        </form>
+      </section>
+
+      <section id="screen-trends" class="screen" data-screen="trends">
+        <div class="section-intro">
+          <p class="eyebrow">Seven-day analytics</p>
+          <h1>Your baseline, not somebody else's.</h1>
+          <p>Daily snapshots stay on this device and reveal patterns as your history grows.</p>
+        </div>
+
+        <article class="content-card trend-card">
+          <div class="card-heading">
+            <div>
+              <p class="eyebrow">Focus trend</p>
+              <h2>Last seven days</h2>
+            </div>
+            <span id="trend-direction" class="state-chip neutral">Building baseline</span>
+          </div>
+          <div id="trend-chart" class="trend-chart" aria-label="Seven-day focus score chart"></div>
+          <div class="chart-legend">
+            <span><i class="legend-focus"></i>Focus</span>
+            <span><i class="legend-fatigue"></i>Fatigue</span>
+          </div>
+        </article>
+
+        <div class="trend-summary-grid">
+          <article class="metric-card">
+            <span class="metric-label">Average focus</span>
+            <strong id="average-focus">0</strong>
+            <span class="metric-detail">Last 7 days</span>
+          </article>
+          <article class="metric-card">
+            <span class="metric-label">Average fatigue</span>
+            <strong id="average-fatigue">0</strong>
+            <span class="metric-detail">Last 7 days</span>
+          </article>
+          <article class="metric-card">
+            <span class="metric-label">Best focus day</span>
+            <strong id="best-day">--</strong>
+            <span class="metric-detail">Personal baseline</span>
+          </article>
+          <article class="metric-card accent-card">
+            <span class="metric-label">Current risk</span>
+            <strong id="trend-risk">Low</strong>
+            <span class="metric-detail">Latest snapshot</span>
+          </article>
+        </div>
+
+        <article class="content-card">
+          <div class="card-heading">
+            <div>
+              <p class="eyebrow">Pattern note</p>
+              <h2>What the week suggests</h2>
+            </div>
+          </div>
+          <p id="trend-note" class="body-copy">
+            Add snapshots on multiple days to uncover your personal focus and fatigue pattern.
+          </p>
+        </article>
+      </section>
+
+      <section id="screen-mentor" class="screen" data-screen="mentor">
+        <div class="section-intro">
+          <p class="eyebrow">AI mentor</p>
+          <h1>Ask about today's pattern.</h1>
+          <p>The mentor answers from your latest behavioral snapshot and explains its evidence.</p>
+        </div>
+
+        <div class="prompt-chips" aria-label="Suggested mentor questions">
+          <button type="button" data-question="Why am I distracted today?">Why distracted?</button>
+          <button type="button" data-question="How can I reduce mental fatigue?">Reduce fatigue</button>
+          <button type="button" data-question="Is my burnout tendency high?">Burnout risk</button>
+        </div>
+
+        <div id="chat-log" class="chat-log" aria-live="polite">
+          <article class="chat-message mentor-message">
+            <span class="chat-avatar">NM</span>
+            <div>
+              <p>
+                Add or load a daily snapshot, then ask me what changed and what to do next.
+              </p>
+              <small>Behavioral coaching, not medical advice.</small>
+            </div>
+          </article>
+        </div>
+
+        <form id="mentor-form" class="mentor-form">
+          <label for="mentor-question" class="sr-only">Ask NeuroMentor a question</label>
+          <input
+            id="mentor-question"
+            type="text"
+            maxlength="1000"
+            placeholder="Why was my focus lower today?"
+            autocomplete="off"
+          />
+          <button type="submit" aria-label="Send question">Send</button>
+        </form>
+      </section>
+    </main>
+
+    <footer class="privacy-footer">
+      <span>Privacy-first</span>
+      <p>Usage metadata only. No messages, page content, or medical diagnosis.</p>
+    </footer>
+  </div>
+
+  <script src="vendor/tesseract/tesseract.min.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

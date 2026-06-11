@@ -1,0 +1,20 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: virtualmentor-db
+    environment:
+      POSTGRES_USER: virtualmentor
+      POSTGRES_PASSWORD: virtualmentor
+      POSTGRES_DB: virtualmentor
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U virtualmentor -d virtualmentor"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:

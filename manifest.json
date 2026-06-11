@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "NeuroMentor AI",
+  "description": "A privacy-first cognitive wellness copilot for focus, fatigue, distraction, and burnout patterns.",
+  "version": "2.5.0",
+  "action": {
+    "default_popup": "index.html",
+    "default_title": "NeuroMentor AI",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png"
+    }
+  },
+  "permissions": ["storage"],
+  "host_permissions": [
+    "http://127.0.0.1:8000/*",
+    "http://localhost:8000/*",
+    "https://neurommentor-api-khaivan2210.onrender.com/*"
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
