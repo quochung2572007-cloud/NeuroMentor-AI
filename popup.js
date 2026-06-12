@@ -3,6 +3,7 @@ const API_BASE = `${API_ROOT}/intelligence`;
 const STORAGE_KEYS = {
   context: 'neuroMentorContext',
   prediction: 'neuroMentorPrediction',
+  snapshotDate: 'neuroMentorSnapshotDate',
   history: 'neuroMentorHistory',
   chat: 'neuroMentorChat',
   authToken: 'neuroMentorAuthToken',
@@ -144,6 +145,7 @@ const elements = {
 let currentContext = emptyContext();
 let currentPrediction = null;
 let history = [];
+let workspaceDate = localDateKey();
 let chatHistory = [];
 let previewUrl = null;
 let ocrWorkerPromise = null;
@@ -342,6 +344,50 @@ function storageRemove(keys) {
 
   keys.forEach(key => localStorage.removeItem(key));
   return Promise.resolve();
+}
+
+function latestHistoryDate(entries) {
+  return entries.reduce((latest, entry) => {
+    const date = typeof entry?.date === 'string' ? entry.date : '';
+    return date > latest ? date : latest;
+  }, '');
+}
+
+function showNewDayStatus() {
+  elements.analysisStatus.textContent =
+    'A new day started. Yesterday is still available in Trends; add today\'s Screen Time.';
+  elements.analysisStatus.className = 'form-status';
+}
+
+async function startFreshWorkspaceDay(showStatus = true) {
+  currentContext = emptyContext();
+  currentPrediction = null;
+  populateContext(currentContext);
+  renderOverview(null);
+
+  if (previewUrl) {
+    URL.revokeObjectURL(previewUrl);
+    previewUrl = null;
+  }
+  elements.screenshotPreview.removeAttribute('src');
+  elements.screenshotPreview.classList.add('hidden');
+  elements.ocrMatches.innerHTML = '';
+  elements.ocrMatches.classList.add('hidden');
+  setOcrStatus('Upload or paste today\'s Screen Time screenshot.');
+
+  await storageRemove([
+    STORAGE_KEYS.context,
+    STORAGE_KEYS.prediction,
+    STORAGE_KEYS.snapshotDate,
+  ]);
+  if (showStatus) showNewDayStatus();
+}
+
+async function rolloverWorkspaceDay() {
+  const today = localDateKey();
+  if (workspaceDate === today) return;
+  workspaceDate = today;
+  await startFreshWorkspaceDay();
 }
 
 function switchScreen(screenName) {
@@ -729,6 +775,7 @@ async function resetWorkspaceData() {
   currentPrediction = null;
   history = [];
   chatHistory = [];
+  workspaceDate = localDateKey();
   populateContext(currentContext);
   renderOverview(null);
   renderTrends();
@@ -736,6 +783,7 @@ async function resetWorkspaceData() {
   await storageRemove([
     STORAGE_KEYS.context,
     STORAGE_KEYS.prediction,
+    STORAGE_KEYS.snapshotDate,
     STORAGE_KEYS.history,
     STORAGE_KEYS.chat,
   ]);
@@ -1471,6 +1519,7 @@ async function processScreenshot(file) {
 
 async function handleAnalysisSubmit(event) {
   event.preventDefault();
+  await rolloverWorkspaceDay();
   currentContext = collectContext();
   const total = Object.values(currentContext.usage).reduce((sum, value) => sum + value, 0);
 
@@ -1488,9 +1537,11 @@ async function handleAnalysisSubmit(event) {
     currentPrediction = await requestPrediction(currentContext);
     setEngineStatus(currentPrediction.source);
     upsertHistoryEntry(currentPrediction, currentContext);
+    workspaceDate = localDateKey();
     await storageSet({
       [STORAGE_KEYS.context]: currentContext,
       [STORAGE_KEYS.prediction]: currentPrediction,
+      [STORAGE_KEYS.snapshotDate]: workspaceDate,
       [STORAGE_KEYS.history]: history,
     });
     if (appMode === 'account') {
@@ -1560,6 +1611,12 @@ function bindEvents() {
     elements.pasteZone?.classList.add('is-pasting');
     processScreenshot(file).finally(() => elements.pasteZone?.classList.remove('is-pasting'));
   });
+  window.addEventListener('focus', () => {
+    void rolloverWorkspaceDay();
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) void rolloverWorkspaceDay();
+  });
 }
 
 async function initialize() {
@@ -1567,9 +1624,22 @@ async function initialize() {
   setAuthMode('login');
   const stored = await storageGet(Object.values(STORAGE_KEYS));
 
-  currentContext = stored[STORAGE_KEYS.context] || emptyContext();
-  currentPrediction = stored[STORAGE_KEYS.prediction] || null;
   history = Array.isArray(stored[STORAGE_KEYS.history]) ? stored[STORAGE_KEYS.history] : [];
+  const today = localDateKey();
+  const snapshotDate = stored[STORAGE_KEYS.snapshotDate] || latestHistoryDate(history);
+  const hasStoredSnapshot = Boolean(
+    stored[STORAGE_KEYS.context] || stored[STORAGE_KEYS.prediction],
+  );
+  const hasTodaySnapshot = snapshotDate === today;
+  const rolledOver = hasStoredSnapshot && !hasTodaySnapshot;
+
+  workspaceDate = today;
+  currentContext = hasTodaySnapshot
+    ? stored[STORAGE_KEYS.context] || emptyContext()
+    : emptyContext();
+  currentPrediction = hasTodaySnapshot
+    ? stored[STORAGE_KEYS.prediction] || null
+    : null;
   chatHistory = Array.isArray(stored[STORAGE_KEYS.chat]) ? stored[STORAGE_KEYS.chat] : [];
   accountDeviceId = stored[STORAGE_KEYS.devicePlatform] === clientPlatform()
     ? stored[STORAGE_KEYS.deviceId] || null
@@ -1579,6 +1649,16 @@ async function initialize() {
   renderOverview(currentPrediction);
   renderTrends();
   renderReminderSettings();
+  if (rolledOver) {
+    await storageRemove([
+      STORAGE_KEYS.context,
+      STORAGE_KEYS.prediction,
+      STORAGE_KEYS.snapshotDate,
+    ]);
+    showNewDayStatus();
+  } else if (hasTodaySnapshot && !stored[STORAGE_KEYS.snapshotDate]) {
+    await storageSet({ [STORAGE_KEYS.snapshotDate]: today });
+  }
 
   chatHistory.slice(-8).forEach(message => {
     addChatMessage(message.role, message.text, message.detail || '');
