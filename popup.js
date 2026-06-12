@@ -42,12 +42,12 @@ const CATEGORY_COLORS = {
 const CATEGORY_KEYWORDS = {
   social: [
     'instagram', 'facebook', 'messenger', 'whatsapp', 'telegram', 'snapchat', 'discord', 'reddit',
-    'twitter', 'threads', 'linkedin', 'messages', 'wechat', 'line', 'signal', 'locket',
+    'twitter', 'threads', 'linkedin', 'messages', 'wechat', 'line', 'signal', 'locket', 'zalo',
   ],
   productivity: [
     'gmail', 'outlook', 'calendar', 'notion', 'slack', 'teams', 'zoom', 'meet', 'docs', 'sheets',
     'drive', 'trello', 'asana', 'jira', 'chrome', 'safari', 'edge', 'firefox', 'maps', 'mail',
-    'files', 'notes', 'vscode', 'visual studio',
+    'files', 'notes', 'vscode', 'visual studio', 'grab', 'gojek',
   ],
   games: [
     'game', 'games', 'roblox', 'minecraft', 'candy crush', 'clash', 'pokemon', 'subway surfers',
@@ -1318,24 +1318,31 @@ function inferOcrApp(text) {
 function parseDuration(text) {
   const normalized = normalizeText(text);
   const hoursAndMinutes = normalized.match(
-    /(\d{1,2})\s*(?:h|hr|hrs|hour|hours)\s*(\d{1,2})\s*(?:m|min|mins|minute|minutes)/,
+    /(\d{1,2})\s*(?:h|hr|hrs|hour|hours|g|gio)\s*(\d{1,2})\s*(?:m|min|mins|minute|minutes|ph|phut)/,
   );
   if (hoursAndMinutes) return Number(hoursAndMinutes[1]) * 60 + Number(hoursAndMinutes[2]);
-  const hours = normalized.match(/(\d{1,2})\s*(?:h|hr|hrs|hour|hours)/);
+  const hours = normalized.match(/(\d{1,2})\s*(?:h|hr|hrs|hour|hours|g|gio)/);
   if (hours) return Number(hours[1]) * 60;
-  const minutes = normalized.match(/(\d{1,3})\s*(?:m|min|mins|minute|minutes)/);
+  const minutes = normalized.match(
+    /(\d{1,3})\s*(?:m|min|mins|minute|minutes|ph|phut)/,
+  );
   return minutes ? Number(minutes[1]) : null;
 }
 
 function extractPrimaryScreenTime(rowLines) {
   const joined = normalizeText(rowLines.join(' '));
   const durationPattern = [
-    '\\d{1,2}\\s*(?:h|hr|hrs|hour|hours)',
-    '(?:\\s*\\d{1,2}\\s*(?:m|min|mins|minute|minutes))?',
-    '|\\d{1,3}\\s*(?:m|min|mins|minute|minutes)',
+    '\\d{1,2}\\s*(?:h|hr|hrs|hour|hours|g|gio)',
+    '(?:\\s*\\d{1,2}\\s*(?:m|min|mins|minute|minutes|ph|phut))?',
+    '|\\d{1,3}\\s*(?:m|min|mins|minute|minutes|ph|phut)',
   ].join('');
   const primaryPattern = new RegExp(
-    `(?:on\\s*screen|screen\\s*time)\\s*(?:for\\s*)?(?:time\\s*)?[:\\-]?\\s*(${durationPattern})`,
+    [
+      '(?:on\\s*screen|screen\\s*on|screen\\s*time',
+      '|man\\s*hinh(?:\\s*bat)?|thoi\\s*gian\\s*man\\s*hinh)',
+      '\\s*(?:for\\s*)?(?:time\\s*)?[:\\-]?\\s*',
+      `(${durationPattern})`,
+    ].join(''),
   );
   const primary = joined.match(primaryPattern);
   if (primary) {
