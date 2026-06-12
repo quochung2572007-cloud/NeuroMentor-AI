@@ -47,11 +47,12 @@ const CATEGORY_KEYWORDS = {
   productivity: [
     'gmail', 'outlook', 'calendar', 'notion', 'slack', 'teams', 'zoom', 'meet', 'docs', 'sheets',
     'drive', 'trello', 'asana', 'jira', 'chrome', 'safari', 'edge', 'firefox', 'maps', 'mail',
-    'files', 'notes', 'vscode', 'visual studio', 'grab', 'gojek',
+    'files', 'notes', 'vscode', 'visual studio', 'grab', 'gojek', 'google',
   ],
   games: [
     'game', 'games', 'roblox', 'minecraft', 'candy crush', 'clash', 'pokemon', 'subway surfers',
     'brawl stars', 'genshin', 'call of duty', 'free fire', 'lien quan', 'mobile legends',
+    'block blast',
   ],
   learning: [
     'duolingo', 'coursera', 'udemy', 'khan', 'quizlet', 'edx', 'skillshare', 'brilliant',
@@ -1339,7 +1340,8 @@ function extractPrimaryScreenTime(rowLines) {
   const primaryPattern = new RegExp(
     [
       '(?:on\\s*screen|screen\\s*on|screen\\s*time',
-      '|man\\s*hinh(?:\\s*bat)?|thoi\\s*gian\\s*man\\s*hinh)',
+      '|man\\s*hinh(?:\\s*b.?t)?|b.?t\\s*man\\s*hinh',
+      '|thoi\\s*gian\\s*man\\s*hinh)',
       '\\s*(?:for\\s*)?(?:time\\s*)?[:\\-]?\\s*',
       `(${durationPattern})`,
     ].join(''),
@@ -1353,7 +1355,7 @@ function extractPrimaryScreenTime(rowLines) {
   const fallbackLine = rowLines.find(line => {
     const normalized = normalizeText(line);
     return parseDuration(normalized) !== null
-      && !/(?:background|average|compared|last week|longer|less|battery|charging)/.test(normalized)
+      && !/(?:background|average|compared|last week|longer|less|battery|charging|chay nen|nen)/.test(normalized)
       && !/%/.test(normalized);
   });
   const minutes = fallbackLine ? parseDuration(fallbackLine) : null;
