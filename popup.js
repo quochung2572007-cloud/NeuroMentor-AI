@@ -1216,7 +1216,13 @@ async function handleMentorQuestion(question) {
 }
 
 function normalizeText(text) {
-  return text.toLowerCase().replace(/\s+/g, ' ').trim();
+  return text
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[|]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function inferCategory(appName) {
@@ -1226,14 +1232,79 @@ function inferCategory(appName) {
   )) || null;
 }
 
+const OCR_APP_KEYWORDS = CATEGORIES
+  .flatMap(category => CATEGORY_KEYWORDS[category].map(keyword => ({ category, keyword })))
+  .sort((left, right) => right.keyword.length - left.keyword.length);
+const OCR_APP_ALIASES = [
+  {
+    key: 'lien quan',
+    name: 'Lien Quan Mobile',
+    category: 'games',
+    patterns: [/\bli.?n\s+qu.?n\b/, /\blien\s*quan\b/],
+  },
+];
+
+function titleCase(value) {
+  return value.replace(/\b\w/g, character => character.toUpperCase());
+}
+
+function inferOcrApp(text) {
+  const normalized = normalizeText(text);
+  const alias = OCR_APP_ALIASES.find(item => item.patterns.some(pattern => pattern.test(normalized)));
+  if (alias) {
+    return {
+      key: alias.key,
+      name: alias.name,
+      category: alias.category,
+    };
+  }
+  const match = OCR_APP_KEYWORDS.find(({ keyword }) => normalized.includes(keyword));
+  if (!match) return null;
+  return {
+    key: match.keyword,
+    name: titleCase(match.keyword),
+    category: match.category,
+  };
+}
+
 function parseDuration(text) {
   const normalized = normalizeText(text);
-  const hoursAndMinutes = normalized.match(/(\d{1,2})\s*(?:h|hr|hours?)\s*(\d{1,2})\s*(?:m|min|minutes?)/);
+  const hoursAndMinutes = normalized.match(
+    /(\d{1,2})\s*(?:h|hr|hrs|hour|hours)\s*(\d{1,2})\s*(?:m|min|mins|minute|minutes)/,
+  );
   if (hoursAndMinutes) return Number(hoursAndMinutes[1]) * 60 + Number(hoursAndMinutes[2]);
-  const hours = normalized.match(/(\d{1,2})\s*(?:h|hr|hours?)/);
+  const hours = normalized.match(/(\d{1,2})\s*(?:h|hr|hrs|hour|hours)/);
   if (hours) return Number(hours[1]) * 60;
-  const minutes = normalized.match(/(\d{1,3})\s*(?:m|min|minutes?)/);
+  const minutes = normalized.match(/(\d{1,3})\s*(?:m|min|mins|minute|minutes)/);
   return minutes ? Number(minutes[1]) : null;
+}
+
+function extractPrimaryScreenTime(rowLines) {
+  const joined = normalizeText(rowLines.join(' '));
+  const durationPattern = [
+    '\\d{1,2}\\s*(?:h|hr|hrs|hour|hours)',
+    '(?:\\s*\\d{1,2}\\s*(?:m|min|mins|minute|minutes))?',
+    '|\\d{1,3}\\s*(?:m|min|mins|minute|minutes)',
+  ].join('');
+  const primaryPattern = new RegExp(
+    `(?:on\\s*screen|screen\\s*time)\\s*(?:for\\s*)?(?:time\\s*)?[:\\-]?\\s*(${durationPattern})`,
+  );
+  const primary = joined.match(primaryPattern);
+  if (primary) {
+    const minutes = parseDuration(primary[1]);
+    if (minutes !== null && minutes <= 1440) return { minutes, confidence: 2 };
+  }
+
+  const fallbackLine = rowLines.find(line => {
+    const normalized = normalizeText(line);
+    return parseDuration(normalized) !== null
+      && !/(?:background|average|compared|last week|longer|less|battery|charging)/.test(normalized)
+      && !/%/.test(normalized);
+  });
+  const minutes = fallbackLine ? parseDuration(fallbackLine) : null;
+  return minutes !== null && minutes <= 1440
+    ? { minutes, confidence: 1 }
+    : null;
 }
 
 function extractTextLines(detections) {
@@ -1244,7 +1315,9 @@ function extractTextLines(detections) {
       const right = b.boundingBox || { x: 0, y: 0 };
       return (left.y - right.y) || (left.x - right.x);
     })
-    .map(item => item.rawValue.trim());
+    .flatMap(item => item.rawValue.split(/\r?\n/))
+    .map(line => line.trim())
+    .filter(Boolean);
 }
 
 function getExtensionAssetUrl(path) {
@@ -1315,28 +1388,34 @@ async function recognizeScreenshot(file) {
 
 function parseDetectedUsage(lines) {
   const usage = emptyUsage();
-  const matches = [];
-  const seen = new Set();
+  const rows = [];
+  let currentRow = null;
 
-  lines.forEach((line, index) => {
-    const minutes = parseDuration(line);
-    if (minutes === null) return;
+  lines.forEach(line => {
+    const app = inferOcrApp(line);
+    if (app) {
+      if (currentRow) rows.push(currentRow);
+      currentRow = { ...app, lines: [line] };
+      return;
+    }
+    if (currentRow && currentRow.lines.length < 5) currentRow.lines.push(line);
+  });
+  if (currentRow) rows.push(currentRow);
 
-    const nearby = lines
-      .slice(Math.max(0, index - 2), index + 1)
-      .filter(value => parseDuration(value) === null);
-    const candidate = [...nearby, line].join(' ').trim();
-    const category = inferCategory(candidate);
-    if (!category) return;
-
-    const matchKey = `${category}:${minutes}:${normalizeText(candidate)}`;
-    if (seen.has(matchKey)) return;
-    seen.add(matchKey);
-
-    usage[category] += minutes;
-    matches.push({ label: candidate, category, minutes });
+  const bestByApp = new Map();
+  rows.forEach(row => {
+    const duration = extractPrimaryScreenTime(row.lines);
+    if (!duration) return;
+    const existing = bestByApp.get(row.key);
+    if (!existing || duration.confidence > existing.confidence) {
+      bestByApp.set(row.key, { ...row, ...duration });
+    }
   });
 
+  const matches = [...bestByApp.values()];
+  matches.forEach(match => {
+    usage[match.category] += match.minutes;
+  });
   return { usage, matches };
 }
 
@@ -1376,11 +1455,14 @@ async function processScreenshot(file) {
     CATEGORIES.forEach(category => {
       document.getElementById(category).value = usage[category];
     });
-    elements.ocrMatches.innerHTML = matches.slice(0, 8).map(match => (
-      `<span class="ocr-match">${CATEGORY_LABELS[match.category]} ${match.minutes}m</span>`
+    elements.ocrMatches.innerHTML = matches.slice(0, 10).map(match => (
+      `<span class="ocr-match">${escapeHtml(match.name)} ${formatMinutes(match.minutes)}</span>`
     )).join('');
     elements.ocrMatches.classList.remove('hidden');
-    setOcrStatus(`Detected ${matches.length} usage rows. Review the totals before analyzing.`, 'success');
+    setOcrStatus(
+      `Detected ${matches.length} apps using each app's On screen time. Review the totals before analyzing.`,
+      'success',
+    );
   } catch (error) {
     console.error('Screenshot OCR failed:', error);
     setOcrStatus('The screenshot could not be read. Try a sharper crop with app names and times.', 'error');
