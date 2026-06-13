@@ -1,5 +1,6 @@
 const API_ROOT = globalThis.NEUROMENTOR_CONFIG?.apiRoot || 'http://localhost:8000/v1';
 const API_BASE = `${API_ROOT}/intelligence`;
+const APP_LOCALE = 'en-US';
 const STORAGE_KEYS = {
   context: 'neuroMentorContext',
   prediction: 'neuroMentorPrediction',
@@ -737,7 +738,7 @@ function renderAccount() {
   if (signedIn) {
     const createdAt = currentUser.created_at ? new Date(currentUser.created_at) : null;
     const memberSince = createdAt && !Number.isNaN(createdAt.getTime())
-      ? `Member since ${createdAt.toLocaleDateString(undefined, { month: 'short', year: 'numeric' })}`
+      ? `Member since ${createdAt.toLocaleDateString(APP_LOCALE, { month: 'short', year: 'numeric' })}`
       : 'NeuroMentor account';
     elements.accountEmail.textContent = currentUser.email;
     elements.accountMemberSince.textContent = memberSince;
@@ -1105,7 +1106,7 @@ function lastSevenDays() {
     const key = localDateKey(date);
     return {
       date: key,
-      label: date.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' }),
+      label: date.toLocaleDateString(APP_LOCALE, { month: 'numeric', day: 'numeric' }),
       entry: byDate.get(key) || null,
     };
   });
@@ -1175,7 +1176,7 @@ function renderTrends() {
   elements.averageFocus.textContent = averageFocus;
   elements.averageFatigue.textContent = averageFatigue;
   elements.bestDay.textContent = new Date(`${best.date}T12:00:00`).toLocaleDateString(
-    undefined,
+    APP_LOCALE,
     { weekday: 'short' },
   );
   elements.trendRisk.textContent = latest.burnout_risk;
