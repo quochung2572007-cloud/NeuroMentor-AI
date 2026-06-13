@@ -1353,6 +1353,15 @@ kbd {
   gap: 3px;
 }
 
+.trend-missing {
+  width: 18px;
+  height: 8px;
+  margin-bottom: 1px;
+  border: 1px dashed rgba(23, 49, 57, 0.32);
+  border-radius: 999px;
+  background: rgba(23, 49, 57, 0.04);
+}
+
 .trend-bar {
   width: 11px;
   min-height: 3px;
@@ -1373,6 +1382,10 @@ kbd {
   color: var(--ink-soft);
   font-size: 9px;
   font-weight: 700;
+}
+
+.trend-day.missing .trend-day-label {
+  color: rgba(23, 49, 57, 0.48);
 }
 
 .chart-legend {

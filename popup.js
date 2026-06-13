@@ -134,7 +134,9 @@ const elements = {
   trendChart: document.getElementById('trend-chart'),
   trendDirection: document.getElementById('trend-direction'),
   averageFocus: document.getElementById('average-focus'),
+  averageFocusDetail: document.getElementById('average-focus-detail'),
   averageFatigue: document.getElementById('average-fatigue'),
+  averageFatigueDetail: document.getElementById('average-fatigue-detail'),
   bestDay: document.getElementById('best-day'),
   trendRisk: document.getElementById('trend-risk'),
   trendNote: document.getElementById('trend-note'),
@@ -1103,7 +1105,7 @@ function lastSevenDays() {
     const key = localDateKey(date);
     return {
       date: key,
-      label: date.toLocaleDateString(undefined, { weekday: 'short' }).slice(0, 2),
+      label: date.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' }),
       entry: byDate.get(key) || null,
     };
   });
@@ -1112,12 +1114,24 @@ function lastSevenDays() {
 function renderTrends() {
   const days = lastSevenDays();
   const available = days.filter(day => day.entry);
+  const coverageLabel = `${available.length} recorded ${available.length === 1 ? 'day' : 'days'}`;
 
   elements.trendChart.innerHTML = days.map(day => {
-    const focus = day.entry?.focus_score || 0;
-    const fatigue = day.entry?.fatigue_score || 0;
+    if (!day.entry) {
+      return `
+        <div class="trend-day missing" title="${day.date}: no snapshot recorded">
+          <div class="trend-bars">
+            <div class="trend-missing" aria-label="No snapshot recorded"></div>
+          </div>
+          <span class="trend-day-label">${day.label}</span>
+        </div>
+      `;
+    }
+
+    const focus = day.entry.focus_score || 0;
+    const fatigue = day.entry.fatigue_score || 0;
     return `
-      <div class="trend-day" title="${day.date}: focus ${focus}, fatigue ${fatigue}">
+      <div class="trend-day recorded" title="${day.date}: focus ${focus}, fatigue ${fatigue}">
         <div class="trend-bars">
           <div class="trend-bar focus" style="--value: ${focus}"></div>
           <div class="trend-bar fatigue" style="--value: ${fatigue}"></div>
@@ -1126,6 +1140,12 @@ function renderTrends() {
       </div>
     `;
   }).join('');
+  elements.trendChart.setAttribute(
+    'aria-label',
+    `Seven-day focus score chart. ${coverageLabel}.`,
+  );
+  elements.averageFocusDetail.textContent = coverageLabel;
+  elements.averageFatigueDetail.textContent = coverageLabel;
 
   if (!available.length) {
     elements.averageFocus.textContent = '0';
@@ -1133,7 +1153,7 @@ function renderTrends() {
     elements.bestDay.textContent = '--';
     elements.trendRisk.textContent = 'Low';
     elements.trendDirection.className = 'state-chip neutral';
-    elements.trendDirection.textContent = 'Building baseline';
+    elements.trendDirection.textContent = '0/7 days';
     elements.trendNote.textContent =
       'Add snapshots on multiple days to uncover your personal focus and fatigue pattern.';
     return;
@@ -1160,13 +1180,17 @@ function renderTrends() {
   );
   elements.trendRisk.textContent = latest.burnout_risk;
   elements.trendDirection.className = `state-chip ${change < -5 ? 'danger' : change > 5 ? '' : 'neutral'}`;
-  elements.trendDirection.textContent = change > 5
-    ? `Up ${change}`
-    : change < -5
-      ? `Down ${Math.abs(change)}`
-      : 'Stable';
-  elements.trendNote.textContent = available.length < 3
-    ? 'A few more daily snapshots will make your personal baseline more reliable.'
+  elements.trendDirection.textContent = available.length === 1
+    ? '1/7 days'
+    : change > 5
+      ? `Up ${change}`
+      : change < -5
+        ? `Down ${Math.abs(change)}`
+        : 'Stable';
+  elements.trendNote.textContent = available.length === 1
+    ? 'Only one day is recorded. Generate one snapshot each day to build the seven-day trend.'
+    : available.length < 3
+      ? 'A few more daily snapshots will make your personal baseline more reliable.'
     : change > 5
       ? 'Focus is improving across the available week. Protect the routines behind your strongest day.'
       : change < -5
