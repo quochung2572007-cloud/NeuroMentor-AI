@@ -271,27 +271,54 @@ def predict_cognitive_state(
 
 def build_mentor_response(question: str, result: CognitiveResult) -> dict[str, str | list[str]]:
     normalized_question = question.lower()
+    category = result.top_category.replace("_", " ").title()
+    category_minutes = result.usage.get(result.top_category, 0)
+    category_share = category_minutes / max(result.total_minutes, 1)
+    focus_step = next(
+        (
+            item
+            for item in result.recommendations
+            if any(word in item.lower() for word in ("focus", "deep-work", "learning", "priority work"))
+        ),
+        None,
+    )
+    recovery_step = next(
+        (
+            item
+            for item in result.recommendations
+            if any(word in item.lower() for word in ("walk", "recovery", "screen-free", "earlier", "bed"))
+        ),
+        None,
+    )
+    next_step = (
+        result.recommendations[0]
+        if result.recommendations
+        else "Protect one short, interruption-free focus block tomorrow."
+    )
 
     if any(word in normalized_question for word in ("distract", "focus", "switch")):
         answer = (
-            f"Your distraction score is {result.distraction_score}/100. "
-            f"The strongest signals are {result.top_category.replace('_', ' ')} usage and "
-            f"a switching rate of {result.switch_rate:.1f} per hour."
+            f"{category} took the largest share of your attention at {category_share:.0%}. "
+            "That matters because a concentrated block of high-stimulation use can leave fewer "
+            "opportunities for attention to settle. "
+            f"{focus_step or next_step}"
         )
     elif any(word in normalized_question for word in ("tired", "fatigue", "energy", "sleep")):
         answer = (
-            f"Your estimated mental-fatigue score is {result.fatigue_score}/100. "
-            "Screen load, late-night activity, and recovery time are the main factors in this estimate."
+            f"Today's energy pressure came from {result.total_minutes} minutes of screen load "
+            "combined with the recovery signals available in your snapshot. "
+            f"You do not need to change everything at once: {recovery_step or next_step}"
         )
     elif any(word in normalized_question for word in ("burnout", "overload", "stress")):
         answer = (
-            f"Today's burnout tendency is {result.burnout_risk} at {result.burnout_score}/100. "
-            "This is a behavioral wellness signal, not a medical diagnosis."
+            f"Your current pattern suggests {result.burnout_risk} behavioral overload pressure. "
+            "The useful question is whether screen load is being balanced by recovery, not whether "
+            f"the label is good or bad. {recovery_step or next_step}"
         )
     else:
         answer = (
-            f"Your focus score is {result.focus_score}/100 with "
-            f"{result.burnout_risk} burnout tendency. The most useful next step is small and specific."
+            f"{category} represented {category_share:.0%} of today's screen time. "
+            f"The highest-leverage next move is small and specific: {next_step}"
         )
 
     return {

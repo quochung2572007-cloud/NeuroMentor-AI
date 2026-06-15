@@ -186,51 +186,250 @@
         <div class="welcome-row">
           <div>
             <p id="greeting" class="eyebrow">Good day</p>
-            <h1>How is your attention doing?</h1>
+            <h1>Today's Cognitive Snapshot</h1>
           </div>
           <button class="text-button" type="button" data-screen-target="analyze">Update today</button>
         </div>
 
-        <article class="score-card">
-          <div id="focus-ring" class="score-ring" style="--score: 0">
-            <div class="score-ring-inner">
-              <strong id="focus-score">0</strong>
-              <span>/100 focus</span>
+        <article class="ai-snapshot-card">
+          <div class="snapshot-orbit snapshot-orbit-one" aria-hidden="true"></div>
+          <div class="snapshot-orbit snapshot-orbit-two" aria-hidden="true"></div>
+          <div class="snapshot-copy">
+            <div class="snapshot-heading">
+              <span class="ai-badge">AI Cognitive Snapshot</span>
+              <span id="focus-label" class="state-chip neutral">No baseline</span>
             </div>
-          </div>
-          <div class="score-copy">
-            <span id="focus-label" class="state-chip neutral">No baseline</span>
             <h2 id="score-headline">Add today's usage to build your cognitive snapshot.</h2>
-            <p id="score-explanation">
+            <p id="snapshot-insight" class="snapshot-insight">
               NeuroMentor uses screen-time metadata, not message or page content.
             </p>
+            <div class="snapshot-confidence">
+              <span>Model confidence</span>
+              <div class="confidence-track" aria-hidden="true">
+                <span id="snapshot-confidence-bar" style="--confidence: 0"></span>
+              </div>
+              <strong id="snapshot-confidence">0%</strong>
+            </div>
+          </div>
+
+          <div class="focus-potential">
+            <span class="metric-label">Focus Potential</span>
+            <div id="focus-ring" class="score-ring" style="--score: 0">
+              <div class="score-ring-inner">
+                <strong id="focus-score">0</strong>
+                <span>/100</span>
+              </div>
+            </div>
+            <p id="focus-trend" class="score-trend">Your baseline starts here.</p>
+          </div>
+
+          <div class="hero-recommendation">
+            <div>
+              <p class="eyebrow">Recommended action</p>
+              <h3 id="recommendation-title">Create your first baseline</h3>
+              <p id="recommendation-text">
+                Enter today's app usage to receive one clear, achievable next step.
+              </p>
+            </div>
+            <button class="primary-button compact-button" type="button" data-screen-target="analyze">
+              Analyze today
+            </button>
           </div>
         </article>
 
-        <div class="metric-grid" aria-label="Cognitive wellness metrics">
-          <article class="metric-card">
-            <span class="metric-label">Mental fatigue</span>
-            <strong id="fatigue-score">0</strong>
-            <span id="fatigue-label" class="metric-detail">Not measured</span>
+        <section class="overview-section metric-explanations" aria-labelledby="metric-explanations-title">
+          <div class="section-heading-row">
+            <div>
+              <p class="eyebrow">Explainable AI</p>
+              <h2 id="metric-explanations-title">What each signal means</h2>
+            </div>
+            <span class="section-note">Expand any metric</span>
+          </div>
+
+          <div class="explain-metric-grid">
+            <details class="explain-metric focus-metric">
+              <summary title="Focus Potential estimates your capacity for sustained attention from today's usage pattern.">
+                <div>
+                  <span class="metric-label">Focus Potential</span>
+                  <strong id="focus-detail-score">0 <small>/ 100</small></strong>
+                </div>
+                <span id="focus-detail-label" class="supportive-label">Not measured</span>
+              </summary>
+              <div class="metric-explanation">
+                <p id="focus-explanation">Add a snapshot to explain your focus potential.</p>
+                <strong>Contributors</strong>
+                <ul id="focus-contributors"></ul>
+                <div class="metric-confidence">
+                  <span>Confidence</span>
+                  <strong id="focus-confidence">0%</strong>
+                </div>
+              </div>
+            </details>
+
+            <details class="explain-metric fatigue-metric">
+              <summary title="Mental Fatigue estimates cognitive load from screen volume, timing, and recovery signals.">
+                <div>
+                  <span class="metric-label">Mental Fatigue</span>
+                  <strong><span id="fatigue-score">0</span> <small>/ 100</small></strong>
+                </div>
+                <span id="fatigue-label" class="supportive-label">Not measured</span>
+              </summary>
+              <div class="metric-explanation">
+                <p id="fatigue-explanation">Add a snapshot to reveal fatigue contributors.</p>
+                <strong>Contributors</strong>
+                <ul id="fatigue-contributors"></ul>
+                <div class="metric-confidence">
+                  <span>Confidence</span>
+                  <strong id="fatigue-confidence">0%</strong>
+                </div>
+              </div>
+            </details>
+
+            <details class="explain-metric distraction-metric">
+              <summary title="Distraction estimates attention fragmentation from app mix, switching, and launch behavior.">
+                <div>
+                  <span class="metric-label">Distraction Load</span>
+                  <strong><span id="distraction-score">0</span> <small>/ 100</small></strong>
+                </div>
+                <span id="distraction-label" class="supportive-label">Not measured</span>
+              </summary>
+              <div class="metric-explanation">
+                <p id="distraction-explanation">Add a snapshot to reveal distraction contributors.</p>
+                <strong>Contributors</strong>
+                <ul id="distraction-contributors"></ul>
+                <div class="metric-confidence">
+                  <span>Confidence</span>
+                  <strong id="distraction-confidence">0%</strong>
+                </div>
+              </div>
+            </details>
+
+            <details class="explain-metric burnout-metric">
+              <summary title="Burnout Tendency is a behavioral wellness signal, not a medical diagnosis.">
+                <div>
+                  <span class="metric-label">Burnout Tendency</span>
+                  <strong id="burnout-risk">Low</strong>
+                </div>
+                <span id="burnout-score" class="supportive-label">0 / 100</span>
+              </summary>
+              <div class="metric-explanation">
+                <p id="burnout-explanation">Add a snapshot to explain recovery pressure.</p>
+                <strong>Contributors</strong>
+                <ul id="burnout-contributors"></ul>
+                <div class="metric-confidence">
+                  <span>Confidence</span>
+                  <strong id="burnout-confidence">0%</strong>
+                </div>
+              </div>
+            </details>
+          </div>
+        </section>
+
+        <div class="intelligence-grid">
+          <article class="forecast-card">
+            <div class="premium-label">
+              <span>AI Forecast</span>
+              <small>Scenario estimate</small>
+            </div>
+            <div class="card-heading">
+              <div>
+                <p class="eyebrow">Tomorrow forecast</p>
+                <h2>Attention outlook</h2>
+              </div>
+              <span id="forecast-confidence" class="confidence-pill">0% confidence</span>
+            </div>
+            <div class="forecast-score-row">
+              <div>
+                <span>Predicted focus</span>
+                <strong id="forecast-focus">--</strong>
+              </div>
+              <span id="forecast-delta" class="forecast-delta neutral">No forecast</span>
+            </div>
+            <p id="forecast-reason" class="body-copy">
+              Add today's snapshot to generate a cautious next-day estimate.
+            </p>
+            <div class="burnout-forecast">
+              <span>Burnout risk forecast</span>
+              <strong id="forecast-burnout">Not available</strong>
+            </div>
           </article>
-          <article class="metric-card">
-            <span class="metric-label">Distraction</span>
-            <strong id="distraction-score">0</strong>
-            <span id="distraction-label" class="metric-detail">Not measured</span>
-          </article>
-          <article class="metric-card accent-card">
-            <span class="metric-label">Burnout tendency</span>
-            <strong id="burnout-risk">Low</strong>
-            <span id="burnout-score" class="metric-detail">0 / 100</span>
-          </article>
-          <article class="metric-card">
-            <span class="metric-label">Productive ratio</span>
-            <strong id="productive-ratio">0%</strong>
-            <span class="metric-detail">Work + learning</span>
+
+          <article class="baseline-card">
+            <div class="card-heading">
+              <div>
+                <p class="eyebrow">Personal baseline</p>
+                <h2>You compared with you</h2>
+              </div>
+              <span class="baseline-badge">Private</span>
+            </div>
+            <div class="baseline-comparison">
+              <div>
+                <span>Your average focus</span>
+                <strong id="baseline-average">--</strong>
+              </div>
+              <div>
+                <span>Today's focus</span>
+                <strong id="baseline-today">--</strong>
+              </div>
+              <div>
+                <span>Difference</span>
+                <strong id="baseline-difference">--</strong>
+              </div>
+            </div>
+            <p id="baseline-note" class="body-copy">
+              More daily snapshots will create your personal baseline.
+            </p>
+            <div class="baseline-context">
+              <span>Productive ratio</span>
+              <strong id="productive-ratio">0%</strong>
+            </div>
           </article>
         </div>
 
-        <article class="content-card">
+        <div class="behavior-achievement-grid">
+          <article class="content-card behavior-card">
+            <div class="card-heading">
+              <div>
+                <p class="eyebrow">Behavioral insight</p>
+                <h2>Why did my score change?</h2>
+              </div>
+              <span class="compact-stat">Impact model</span>
+            </div>
+            <div id="impact-list" class="impact-list"></div>
+            <div class="dominant-impact">
+              <span>Most influential factor</span>
+              <strong id="dominant-impact">Waiting for today's data</strong>
+            </div>
+          </article>
+
+          <article class="content-card achievement-card">
+            <div class="card-heading">
+              <div>
+                <p class="eyebrow">Momentum</p>
+                <h2>Small wins that compound</h2>
+              </div>
+            </div>
+            <div class="achievement-grid">
+              <div class="achievement-item">
+                <span class="achievement-icon">LS</span>
+                <span>Learning streak</span>
+                <strong id="learning-streak">0 days</strong>
+              </div>
+              <div class="achievement-item">
+                <span class="achievement-icon">DW</span>
+                <span>Deep-work sessions</span>
+                <strong id="deep-work-sessions">0 this month</strong>
+              </div>
+              <div class="achievement-item">
+                <span class="achievement-icon">RS</span>
+                <span>Recovery score</span>
+                <strong id="recovery-score">--</strong>
+              </div>
+            </div>
+          </article>
+        </div>
+
+        <article class="content-card usage-card">
           <div class="card-heading">
             <div>
               <p class="eyebrow">Today's breakdown</p>
@@ -241,17 +440,7 @@
           <div id="usage-breakdown" class="usage-breakdown"></div>
         </article>
 
-        <article class="content-card insight-card">
-          <div class="card-heading">
-            <div>
-              <p class="eyebrow">Explainable insight</p>
-              <h2>What shaped your score</h2>
-            </div>
-          </div>
-          <ul id="insight-list" class="insight-list">
-            <li>Complete an analysis to reveal your strongest behavioral signals.</li>
-          </ul>
-        </article>
+        <ul id="insight-list" class="insight-list hidden" aria-hidden="true"></ul>
 
         <article id="alert-card" class="alert-card hidden">
           <span id="alert-severity" class="alert-severity">Watch</span>
@@ -260,19 +449,6 @@
             <p id="alert-message"></p>
             <p id="alert-reason" class="alert-reason"></p>
           </div>
-        </article>
-
-        <article class="recommendation-card">
-          <div>
-            <p class="eyebrow">Recommended next move</p>
-            <h2 id="recommendation-title">Create your first baseline</h2>
-            <p id="recommendation-text">
-              Enter today's app usage and optional behavior signals to get a focused intervention.
-            </p>
-          </div>
-          <button class="primary-button compact-button" type="button" data-screen-target="analyze">
-            Analyze today
-          </button>
         </article>
       </section>
 
@@ -406,8 +582,27 @@
             </div>
             <span id="trend-direction" class="state-chip neutral">Building baseline</span>
           </div>
+          <div id="trend-empty-state" class="trend-empty-state hidden">
+            <div class="empty-state-mark" aria-hidden="true">
+              <span></span><span></span><span></span><span></span>
+            </div>
+            <div>
+              <p class="eyebrow">Baseline in progress</p>
+              <h3>Not enough history yet.</h3>
+              <p>Add one daily snapshot for seven days to unlock your personal intelligence layer.</p>
+            </div>
+            <ul>
+              <li>Personal baseline</li>
+              <li>Burnout trend</li>
+              <li>Weekly insights</li>
+              <li>Focus forecasting</li>
+            </ul>
+            <button class="primary-button compact-button" type="button" data-screen-target="analyze">
+              Add today's snapshot
+            </button>
+          </div>
           <div id="trend-chart" class="trend-chart" aria-label="Seven-day focus score chart"></div>
-          <div class="chart-legend">
+          <div id="trend-chart-legend" class="chart-legend">
             <span><i class="legend-focus"></i>Focus</span>
             <span><i class="legend-fatigue"></i>Fatigue</span>
           </div>
@@ -450,16 +645,25 @@
       </section>
 
       <section id="screen-mentor" class="screen" data-screen="mentor">
-        <div class="section-intro">
-          <p class="eyebrow">AI mentor</p>
-          <h1>Ask about today's pattern.</h1>
-          <p>The mentor answers from your latest behavioral snapshot and explains its evidence.</p>
+        <div class="mentor-intro">
+          <div>
+            <span class="ai-badge">Evidence-based coaching</span>
+            <h1>Turn today's pattern into one better tomorrow.</h1>
+            <p>
+              Ask what changed, why it matters, or what small action would create the most leverage.
+            </p>
+          </div>
+          <div class="mentor-context-card">
+            <span>Current coaching context</span>
+            <strong id="mentor-context-title">Waiting for a snapshot</strong>
+            <p id="mentor-context-detail">Analyze today to ground the conversation in your data.</p>
+          </div>
         </div>
 
         <div class="prompt-chips" aria-label="Suggested mentor questions">
-          <button type="button" data-question="Why am I distracted today?">Why distracted?</button>
-          <button type="button" data-question="How can I reduce mental fatigue?">Reduce fatigue</button>
-          <button type="button" data-question="Is my burnout tendency high?">Burnout risk</button>
+          <button type="button" data-question="What most influenced my focus today?">What changed?</button>
+          <button type="button" data-question="What is the smallest useful action I can take tomorrow?">Plan tomorrow</button>
+          <button type="button" data-question="How can I reduce mental fatigue without changing everything?">Protect energy</button>
         </div>
 
         <div id="chat-log" class="chat-log" aria-live="polite">
@@ -467,9 +671,9 @@
             <span class="chat-avatar">NM</span>
             <div>
               <p>
-                Add or load a daily snapshot, then ask me what changed and what to do next.
+                I will connect your screen-time pattern to a practical next step, not just repeat a score.
               </p>
-              <small>Behavioral coaching, not medical advice.</small>
+              <small>Your data stays grounded in behavioral metadata. This is coaching, not medical advice.</small>
             </div>
           </article>
         </div>

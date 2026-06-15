@@ -106,14 +106,45 @@ const elements = {
   focusScore: document.getElementById('focus-score'),
   focusLabel: document.getElementById('focus-label'),
   scoreHeadline: document.getElementById('score-headline'),
-  scoreExplanation: document.getElementById('score-explanation'),
+  snapshotInsight: document.getElementById('snapshot-insight'),
+  snapshotConfidence: document.getElementById('snapshot-confidence'),
+  snapshotConfidenceBar: document.getElementById('snapshot-confidence-bar'),
+  focusTrend: document.getElementById('focus-trend'),
+  focusDetailScore: document.getElementById('focus-detail-score'),
+  focusDetailLabel: document.getElementById('focus-detail-label'),
+  focusExplanation: document.getElementById('focus-explanation'),
+  focusContributors: document.getElementById('focus-contributors'),
+  focusConfidence: document.getElementById('focus-confidence'),
   fatigueScore: document.getElementById('fatigue-score'),
   fatigueLabel: document.getElementById('fatigue-label'),
+  fatigueExplanation: document.getElementById('fatigue-explanation'),
+  fatigueContributors: document.getElementById('fatigue-contributors'),
+  fatigueConfidence: document.getElementById('fatigue-confidence'),
   distractionScore: document.getElementById('distraction-score'),
   distractionLabel: document.getElementById('distraction-label'),
+  distractionExplanation: document.getElementById('distraction-explanation'),
+  distractionContributors: document.getElementById('distraction-contributors'),
+  distractionConfidence: document.getElementById('distraction-confidence'),
   burnoutRisk: document.getElementById('burnout-risk'),
   burnoutScore: document.getElementById('burnout-score'),
+  burnoutExplanation: document.getElementById('burnout-explanation'),
+  burnoutContributors: document.getElementById('burnout-contributors'),
+  burnoutConfidence: document.getElementById('burnout-confidence'),
   productiveRatio: document.getElementById('productive-ratio'),
+  forecastFocus: document.getElementById('forecast-focus'),
+  forecastDelta: document.getElementById('forecast-delta'),
+  forecastConfidence: document.getElementById('forecast-confidence'),
+  forecastReason: document.getElementById('forecast-reason'),
+  forecastBurnout: document.getElementById('forecast-burnout'),
+  baselineAverage: document.getElementById('baseline-average'),
+  baselineToday: document.getElementById('baseline-today'),
+  baselineDifference: document.getElementById('baseline-difference'),
+  baselineNote: document.getElementById('baseline-note'),
+  impactList: document.getElementById('impact-list'),
+  dominantImpact: document.getElementById('dominant-impact'),
+  learningStreak: document.getElementById('learning-streak'),
+  deepWorkSessions: document.getElementById('deep-work-sessions'),
+  recoveryScore: document.getElementById('recovery-score'),
   totalTime: document.getElementById('total-time'),
   usageBreakdown: document.getElementById('usage-breakdown'),
   insightList: document.getElementById('insight-list'),
@@ -141,9 +172,13 @@ const elements = {
   bestDay: document.getElementById('best-day'),
   trendRisk: document.getElementById('trend-risk'),
   trendNote: document.getElementById('trend-note'),
+  trendEmptyState: document.getElementById('trend-empty-state'),
+  trendChartLegend: document.getElementById('trend-chart-legend'),
   chatLog: document.getElementById('chat-log'),
   mentorForm: document.getElementById('mentor-form'),
   mentorQuestion: document.getElementById('mentor-question'),
+  mentorContextTitle: document.getElementById('mentor-context-title'),
+  mentorContextDetail: document.getElementById('mentor-context-detail'),
 };
 
 let currentContext = emptyContext();
@@ -1024,38 +1059,348 @@ function renderBreakdown(usage) {
   }).join('');
 }
 
+function supportiveScoreLabel(metric, score) {
+  if (metric === 'focus') {
+    if (score >= 70) return 'Well supported';
+    if (score >= 45) return 'Building momentum';
+    return 'Needs attention';
+  }
+  if (metric === 'burnout') {
+    if (score >= 70) return 'Recovery priority';
+    if (score >= 42) return 'Watch your load';
+    return 'Low pressure';
+  }
+  if (score <= 30) return 'Well managed';
+  if (score <= 55) return 'Worth watching';
+  return 'Needs support';
+}
+
+function renderContributorList(element, contributors) {
+  element.innerHTML = contributors
+    .slice(0, 4)
+    .map(contributor => `<li>${escapeHtml(contributor)}</li>`)
+    .join('');
+}
+
+function dominantUsage(result) {
+  const category = result.top_category && CATEGORIES.includes(result.top_category)
+    ? result.top_category
+    : CATEGORIES.reduce((best, item) => result.usage[item] > result.usage[best] ? item : best);
+  const minutes = Number(result.usage?.[category]) || 0;
+  const percentage = result.total_minutes
+    ? Math.round((minutes / result.total_minutes) * 100)
+    : 0;
+  return { category, minutes, percentage };
+}
+
+function buildSnapshotInsight(result, context) {
+  const dominant = dominantUsage(result);
+  const categoryName = CATEGORY_LABELS[dominant.category] || 'Your largest category';
+  const deepWork = Number(context.deep_work_minutes) || 0;
+  const firstSentence = dominant.percentage
+    ? `${categoryName} represented ${dominant.percentage}% of your screen time.`
+    : 'Your screen-time mix is still being established.';
+  const secondSentence = deepWork >= 25
+    ? `You also protected ${deepWork} minutes for deeper work.`
+    : 'No sustained deep-work session was detected.';
+  return `${firstSentence} ${secondSentence}`;
+}
+
+function previousFocusEntries() {
+  const today = localDateKey();
+  return history.filter(entry => (
+    entry.date !== today && Number.isFinite(Number(entry.focus_score))
+  ));
+}
+
+function renderBaseline(result, hasData) {
+  if (!hasData) {
+    elements.baselineAverage.textContent = '--';
+    elements.baselineToday.textContent = '--';
+    elements.baselineDifference.textContent = '--';
+    elements.baselineDifference.className = '';
+    elements.baselineNote.textContent =
+      'More daily snapshots will create your personal baseline.';
+    elements.focusTrend.textContent = 'Your baseline starts here.';
+    return;
+  }
+
+  const previous = previousFocusEntries();
+  const average = previous.length
+    ? Math.round(previous.reduce((sum, entry) => sum + Number(entry.focus_score), 0) / previous.length)
+    : result.focus_score;
+  const difference = result.focus_score - average;
+  const differenceText = difference > 0 ? `+${difference}` : String(difference);
+
+  elements.baselineAverage.textContent = average;
+  elements.baselineToday.textContent = result.focus_score;
+  elements.baselineDifference.textContent = previous.length ? differenceText : 'New';
+  elements.baselineDifference.className = difference > 0
+    ? 'positive'
+    : difference < 0
+      ? 'negative'
+      : 'neutral';
+  elements.baselineNote.textContent = previous.length
+    ? difference > 4
+      ? 'Today is above your recent personal average. Protect what worked.'
+      : difference < -4
+        ? 'Today is below your recent average, which makes the next small action easier to target.'
+        : 'Today is close to your recent baseline. Consistency is becoming visible.'
+    : 'This is your first baseline. Future scores will compare against your own history.';
+  elements.focusTrend.textContent = previous.length
+    ? `${differenceText} vs your personal average`
+    : 'First personal baseline recorded';
+}
+
+function renderForecast(result, context, hasData) {
+  if (!hasData) {
+    elements.forecastFocus.textContent = '--';
+    elements.forecastDelta.textContent = 'No forecast';
+    elements.forecastDelta.className = 'forecast-delta neutral';
+    elements.forecastConfidence.textContent = '0% confidence';
+    elements.forecastReason.textContent =
+      'Add today\'s snapshot to generate a cautious next-day estimate.';
+    elements.forecastBurnout.textContent = 'Not available';
+    return;
+  }
+
+  let opportunity = 2;
+  let reason = 'Keeping today\'s balance should support a similar attention pattern tomorrow.';
+  if (context.deep_work_minutes < 25) {
+    opportunity += 5;
+    reason = 'A protected 30-minute focus block would address today\'s strongest missing signal.';
+  }
+  if (result.productive_ratio < 0.35) opportunity += 3;
+  if (context.late_night_minutes >= 60) {
+    opportunity -= 3;
+    reason = 'Reducing late-night screen use would give tomorrow\'s focus estimate more support.';
+  }
+
+  const predicted = clamp(result.focus_score + opportunity);
+  const delta = predicted - result.focus_score;
+  const confidence = clamp(
+    Math.round(result.confidence * 100) - 20 + Math.min(history.length * 3, 12),
+    45,
+    82,
+  );
+  elements.forecastFocus.textContent = predicted;
+  elements.forecastDelta.textContent = `${delta >= 0 ? '+' : ''}${delta} potential`;
+  elements.forecastDelta.className = `forecast-delta ${delta > 0 ? 'positive' : 'neutral'}`;
+  elements.forecastConfidence.textContent = `${confidence}% confidence`;
+  elements.forecastReason.textContent = reason;
+  elements.forecastBurnout.textContent = result.burnout_risk === 'high'
+    ? 'Elevated; prioritize recovery'
+    : result.burnout_risk === 'moderate'
+      ? 'Moderate; likely to ease with recovery'
+      : 'Low and stable';
+}
+
+function buildBehaviorImpacts(result, context) {
+  const dominant = dominantUsage(result);
+  const impacts = [];
+  const categoryName = CATEGORY_LABELS[dominant.category] || 'Dominant usage';
+  const stimulationCategory = ['games', 'entertainment', 'social'].includes(dominant.category);
+
+  if (dominant.percentage) {
+    impacts.push({
+      label: `${categoryName} concentration`,
+      value: stimulationCategory
+        ? `+${clamp(dominant.percentage * 0.31, 4, 24)} distraction`
+        : `+${clamp(dominant.percentage * 0.2, 3, 16)} focus`,
+      impact: stimulationCategory ? dominant.percentage : -dominant.percentage,
+      tone: stimulationCategory ? 'pressure' : 'support',
+    });
+  }
+  if (context.deep_work_minutes < 25) {
+    impacts.push({
+      label: 'No sustained deep-work block',
+      value: '+15 distraction',
+      impact: 15,
+      tone: 'pressure',
+    });
+  } else {
+    impacts.push({
+      label: `${context.deep_work_minutes} min deep work`,
+      value: `+${clamp(context.deep_work_minutes / 5, 5, 18)} focus`,
+      impact: -context.deep_work_minutes,
+      tone: 'support',
+    });
+  }
+  if (result.productive_ratio < 0.35) {
+    impacts.push({
+      label: 'Low productivity ratio',
+      value: '+10 distraction',
+      impact: 10,
+      tone: 'pressure',
+    });
+  }
+  if (context.late_night_minutes > 0) {
+    impacts.push({
+      label: `${context.late_night_minutes} min late-night use`,
+      value: `+${clamp(context.late_night_minutes / 8, 3, 18)} fatigue`,
+      impact: context.late_night_minutes / 8,
+      tone: 'pressure',
+    });
+  }
+  if (result.switch_rate >= 8) {
+    impacts.push({
+      label: `${Number(result.switch_rate).toFixed(1)} switches per hour`,
+      value: `+${clamp(result.switch_rate * 0.7, 3, 16)} distraction`,
+      impact: result.switch_rate,
+      tone: 'pressure',
+    });
+  }
+  return impacts.sort((left, right) => Math.abs(right.impact) - Math.abs(left.impact));
+}
+
+function renderBehaviorImpacts(result, context, hasData) {
+  if (!hasData) {
+    elements.impactList.innerHTML = `
+      <div class="impact-empty">Complete an analysis to reveal the strongest behavioral influences.</div>
+    `;
+    elements.dominantImpact.textContent = 'Waiting for today\'s data';
+    return;
+  }
+
+  const impacts = buildBehaviorImpacts(result, context);
+  elements.impactList.innerHTML = impacts.slice(0, 4).map(item => `
+    <div class="impact-row ${item.tone}">
+      <span>${escapeHtml(item.label)}</span>
+      <strong>${escapeHtml(item.value)}</strong>
+    </div>
+  `).join('');
+  elements.dominantImpact.textContent = impacts[0]?.label || 'Balanced usage';
+}
+
+function calculateLearningStreak() {
+  const entries = [...history].sort((a, b) => b.date.localeCompare(a.date));
+  if (!entries.length) return 0;
+  let expected = new Date(`${entries[0].date}T12:00:00`);
+  let streak = 0;
+
+  for (const entry of entries) {
+    if (entry.date !== localDateKey(expected)) break;
+    if ((Number(entry.context?.usage?.learning) || 0) <= 0) break;
+    streak += 1;
+    expected.setDate(expected.getDate() - 1);
+  }
+  return streak;
+}
+
+function renderAchievements(result, hasData) {
+  const monthKey = localDateKey().slice(0, 7);
+  const deepWorkSessions = history
+    .filter(entry => entry.date.startsWith(monthKey))
+    .reduce((sum, entry) => (
+      sum + Math.floor((Number(entry.context?.deep_work_minutes) || 0) / 25)
+    ), 0);
+  const recovery = hasData
+    ? clamp(
+      100
+      - result.fatigue_score * 0.55
+      - result.burnout_score * 0.3
+      + result.recovery_ratio * 25,
+    )
+    : null;
+
+  const streak = calculateLearningStreak();
+  elements.learningStreak.textContent = `${streak} ${streak === 1 ? 'day' : 'days'}`;
+  elements.deepWorkSessions.textContent = `${deepWorkSessions} this month`;
+  elements.recoveryScore.textContent = recovery === null ? '--' : `${recovery}%`;
+}
+
+function metricContributors(result, context) {
+  const dominant = dominantUsage(result);
+  const dominantLabel = `${CATEGORY_LABELS[dominant.category]}: ${dominant.percentage}% of screen time`;
+  return {
+    focus: [
+      dominantLabel,
+      context.deep_work_minutes >= 25
+        ? `${context.deep_work_minutes} minutes of protected deep work`
+        : 'No sustained deep-work block',
+      `${Math.round(result.productive_ratio * 100)}% productive or learning activity`,
+    ],
+    fatigue: [
+      `${formatMinutes(result.total_minutes)} total screen load`,
+      context.late_night_minutes
+        ? `${context.late_night_minutes} late-night minutes`
+        : 'No late-night use reported',
+      result.recovery_ratio >= 0.08 ? 'Recovery activity detected' : 'Limited recovery activity',
+    ],
+    distraction: [
+      dominantLabel,
+      result.switch_rate
+        ? `${Number(result.switch_rate).toFixed(1)} app switches per screen-time hour`
+        : 'No app-switching estimate supplied',
+      context.launch_count ? `${context.launch_count} app launches` : 'No launch count supplied',
+    ],
+    burnout: [
+      `Mental fatigue signal: ${result.fatigue_score}/100`,
+      context.late_night_minutes
+        ? `${context.late_night_minutes} late-night minutes`
+        : 'No late-night pressure reported',
+      result.recovery_ratio >= 0.08 ? 'Some recovery activity detected' : 'Low recovery share',
+    ],
+  };
+}
+
 function renderOverview(prediction) {
   const result = prediction || predictLocally(emptyContext());
   const hasData = result.total_minutes > 0;
-  const riskClass = result.burnout_risk === 'high'
-    ? 'danger'
-    : result.burnout_risk === 'moderate'
-      ? 'warning'
-      : hasData
-        ? ''
-        : 'neutral';
+  const context = hasData ? currentContext : emptyContext();
+  const confidence = hasData ? Math.round(result.confidence * 100) : 0;
+  const contributors = metricContributors(result, context);
+  const focusLabel = hasData ? supportiveScoreLabel('focus', result.focus_score) : 'No baseline';
 
   elements.focusRing.style.setProperty('--score', result.focus_score);
   elements.focusScore.textContent = result.focus_score;
-  elements.focusLabel.className = `state-chip ${riskClass}`;
-  elements.focusLabel.textContent = hasData ? scoreLabel(result.focus_score) : 'No baseline';
+  elements.focusLabel.className = `state-chip ${hasData && result.focus_score < 45 ? 'warning' : 'neutral'}`;
+  elements.focusLabel.textContent = focusLabel;
   elements.scoreHeadline.textContent = hasData
     ? result.focus_score >= 70
-      ? 'Your attention pattern looks steady today.'
+      ? 'Your attention has a strong foundation today.'
       : result.focus_score >= 45
-        ? 'Your focus is mixed, with a few clear pressure points.'
-        : 'Your attention is carrying more friction than usual.'
+        ? 'Your focus has useful momentum and a few clear pressure points.'
+        : 'Your focus needs support, not judgment.'
     : 'Add today\'s usage to build your cognitive snapshot.';
-  elements.scoreExplanation.textContent = hasData
-    ? `Confidence ${Math.round(result.confidence * 100)}%. Main usage category: ${CATEGORY_LABELS[result.top_category] || 'none'}.`
+  elements.snapshotInsight.textContent = hasData
+    ? buildSnapshotInsight(result, context)
     : 'NeuroMentor uses screen-time metadata, not message or page content.';
+  elements.snapshotConfidence.textContent = `${confidence}%`;
+  elements.snapshotConfidenceBar.style.setProperty('--confidence', confidence);
 
+  elements.focusDetailScore.innerHTML = `${result.focus_score} <small>/ 100</small>`;
+  elements.focusDetailLabel.textContent = hasData ? focusLabel : 'Not measured';
+  elements.focusExplanation.textContent = hasData
+    ? 'Focus Potential estimates how well today\'s behavior supported sustained attention.'
+    : 'Add a snapshot to explain your focus potential.';
+  elements.focusConfidence.textContent = `${confidence}%`;
+  renderContributorList(elements.focusContributors, hasData ? contributors.focus : []);
   elements.fatigueScore.textContent = result.fatigue_score;
-  elements.fatigueLabel.textContent = hasData ? scoreLabel(result.fatigue_score, true) : 'Not measured';
+  elements.fatigueLabel.textContent = hasData
+    ? supportiveScoreLabel('fatigue', result.fatigue_score)
+    : 'Not measured';
+  elements.fatigueExplanation.textContent = hasData
+    ? 'Mental Fatigue estimates cognitive load from screen volume, timing, and recovery.'
+    : 'Add a snapshot to reveal fatigue contributors.';
+  elements.fatigueConfidence.textContent = `${confidence}%`;
+  renderContributorList(elements.fatigueContributors, hasData ? contributors.fatigue : []);
   elements.distractionScore.textContent = result.distraction_score;
-  elements.distractionLabel.textContent = hasData ? scoreLabel(result.distraction_score, true) : 'Not measured';
+  elements.distractionLabel.textContent = hasData
+    ? supportiveScoreLabel('distraction', result.distraction_score)
+    : 'Not measured';
+  elements.distractionExplanation.textContent = hasData
+    ? 'Distraction Load estimates attention fragmentation from app mix and switching behavior.'
+    : 'Add a snapshot to reveal distraction contributors.';
+  elements.distractionConfidence.textContent = `${confidence}%`;
+  renderContributorList(elements.distractionContributors, hasData ? contributors.distraction : []);
   elements.burnoutRisk.textContent = result.burnout_risk;
   elements.burnoutScore.textContent = `${result.burnout_score} / 100`;
+  elements.burnoutExplanation.textContent = hasData
+    ? 'Burnout Tendency combines behavioral load and recovery signals. It is not a diagnosis.'
+    : 'Add a snapshot to explain recovery pressure.';
+  elements.burnoutConfidence.textContent = `${confidence}%`;
+  renderContributorList(elements.burnoutContributors, hasData ? contributors.burnout : []);
   elements.productiveRatio.textContent = `${Math.round(result.productive_ratio * 100)}%`;
   elements.totalTime.textContent = formatMinutes(result.total_minutes);
   renderBreakdown(result.usage);
@@ -1075,9 +1420,20 @@ function renderOverview(prediction) {
   }
 
   const recommendation = result.recommendations?.[0];
-  elements.recommendationTitle.textContent = hasData ? 'Try this next' : 'Create your first baseline';
+  elements.recommendationTitle.textContent = hasData ? 'One useful move for tomorrow' : 'Create your first baseline';
   elements.recommendationText.textContent = recommendation
     || 'Enter today\'s app usage and optional behavior signals to get a focused intervention.';
+
+  renderBaseline(result, hasData);
+  renderForecast(result, context, hasData);
+  renderBehaviorImpacts(result, context, hasData);
+  renderAchievements(result, hasData);
+  elements.mentorContextTitle.textContent = hasData
+    ? `${focusLabel} focus potential`
+    : 'Waiting for a snapshot';
+  elements.mentorContextDetail.textContent = hasData
+    ? `${buildSnapshotInsight(result, context)}`
+    : 'Analyze today to ground the conversation in your data.';
 }
 
 function upsertHistoryEntry(prediction, context) {
@@ -1122,7 +1478,7 @@ function renderTrends() {
       return `
         <div class="trend-day missing" title="${day.date}: no snapshot recorded">
           <div class="trend-bars">
-            <div class="trend-missing" aria-label="No snapshot recorded"></div>
+            <div class="trend-placeholder" aria-label="No snapshot recorded"></div>
           </div>
           <span class="trend-day-label">${day.label}</span>
         </div>
@@ -1145,6 +1501,10 @@ function renderTrends() {
     'aria-label',
     `Seven-day focus score chart. ${coverageLabel}.`,
   );
+  const showTrendOnboarding = available.length < 2;
+  elements.trendEmptyState.classList.toggle('hidden', !showTrendOnboarding);
+  elements.trendChart.classList.toggle('hidden', showTrendOnboarding);
+  elements.trendChartLegend.classList.toggle('hidden', showTrendOnboarding);
   elements.averageFocusDetail.textContent = coverageLabel;
   elements.averageFatigueDetail.textContent = coverageLabel;
 
@@ -1237,21 +1597,41 @@ function addChatMessage(role, text, detail = '') {
 
 function buildLocalMentorResponse(question, prediction) {
   const normalized = question.toLowerCase();
+  const dominant = dominantUsage(prediction);
+  const category = CATEGORY_LABELS[dominant.category] || 'your dominant app category';
+  const evidence = prediction.insights?.slice(0, 2) || [];
+  const recommendations = prediction.recommendations || [];
+  const focusStep = recommendations.find(item => (
+    /focus|deep-work|learning|priority work/i.test(item)
+  )) || recommendations[0];
+  const recoveryStep = recommendations.find(item => (
+    /walk|recovery|screen-free|earlier|bed/i.test(item)
+  )) || recommendations[0];
+  const nextStep = recommendations[0]
+    || 'Protect one short, interruption-free focus block tomorrow.';
   let answer;
 
   if (normalized.includes('distract') || normalized.includes('focus') || normalized.includes('switch')) {
-    answer = `Your distraction score is ${prediction.distraction_score}/100. The strongest signals are ${CATEGORY_LABELS[prediction.top_category] || 'your dominant category'} usage and a switching rate of ${Number(prediction.switch_rate).toFixed(1)} per hour.`;
+    answer = `${category} took the largest share of your attention at ${dominant.percentage}%. ${
+      currentContext.deep_work_minutes >= 25
+        ? `Your ${currentContext.deep_work_minutes}-minute deep-work block helped offset some of that pressure.`
+        : 'Without a protected deep-work block, your attention had fewer chances to settle.'
+    } ${focusStep || nextStep}`;
   } else if (normalized.includes('tired') || normalized.includes('fatigue') || normalized.includes('sleep')) {
-    answer = `Your estimated mental-fatigue score is ${prediction.fatigue_score}/100. Screen load, late-night activity, and recovery time are the main factors in this estimate.`;
+    answer = `Today's energy pressure came mostly from ${formatMinutes(prediction.total_minutes)} of screen load${
+      currentContext.late_night_minutes
+        ? ` and ${currentContext.late_night_minutes} late-night minutes`
+        : ''
+    }. You do not need to overhaul the whole day: ${recoveryStep || nextStep}`;
   } else if (normalized.includes('burnout') || normalized.includes('stress') || normalized.includes('overload')) {
-    answer = `Today's burnout tendency is ${prediction.burnout_risk} at ${prediction.burnout_score}/100. This is a behavioral wellness signal, not a medical diagnosis.`;
+    answer = `Your current pattern suggests ${prediction.burnout_risk} behavioral overload pressure. The useful signal is not the label itself; it is whether screen load is being balanced by recovery. ${recoveryStep || nextStep}`;
   } else {
-    answer = `Your focus score is ${prediction.focus_score}/100 with ${prediction.burnout_risk} burnout tendency. The most useful next step is small and specific.`;
+    answer = `${buildSnapshotInsight(prediction, currentContext)} The highest-leverage next move is simple: ${nextStep}`;
   }
 
   return {
     answer,
-    evidence: prediction.insights?.slice(0, 2) || [],
+    evidence,
     next_steps: prediction.recommendations?.slice(0, 2) || [],
   };
 }
@@ -1278,10 +1658,12 @@ async function handleMentorQuestion(question) {
   addChatMessage('user', cleaned);
   elements.mentorQuestion.value = '';
   const response = await requestMentorResponse(cleaned);
+  const evidence = (response.evidence || [])[0];
+  const nextStep = (response.next_steps || [])[0];
   const detail = [
-    ...(response.evidence || []).slice(0, 1),
-    ...(response.next_steps || []).slice(0, 1),
-  ].join(' Next: ');
+    evidence ? `Evidence: ${evidence}` : '',
+    nextStep ? `Next step: ${nextStep}` : '',
+  ].filter(Boolean).join(' ');
   addChatMessage('mentor', response.answer, detail);
 
   chatHistory.push({ role: 'user', text: cleaned }, { role: 'mentor', text: response.answer, detail });
