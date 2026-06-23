@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import unicodedata
 from dataclasses import asdict, dataclass
+from typing import TypedDict
 
 from app.services.scoring import (
     CATEGORY_LABELS,
     PrimaryAction,
+    ScoreBand,
+    ScoreResult,
     calculate_scores,
+    score_band,
 )
 
 VI_CATEGORY_LABELS = {
@@ -29,6 +33,14 @@ class AlertResult:
     message: str
     reason: str
     action: str
+
+
+class MentorResponsePayload(TypedDict):
+    language: str
+    answer: str
+    evidence: list[str]
+    next_steps: list[str]
+    disclaimer: str
 
 
 @dataclass
@@ -61,6 +73,101 @@ class CognitiveResult:
         return result
 
 
+def _build_score_alerts(scores: ScoreResult, app_switches: int) -> list[AlertResult]:
+    if not scores["total_minutes"]:
+        return []
+
+    signals: list[tuple[str, int, ScoreBand]] = [
+        ("focus", scores["focus_score"], score_band("focus", scores["focus_score"])),
+        ("fatigue", scores["fatigue_score"], score_band("fatigue", scores["fatigue_score"])),
+        (
+            "distraction",
+            scores["distraction_score"],
+            score_band("distraction", scores["distraction_score"]),
+        ),
+        ("burnout", scores["burnout_score"], score_band("burnout", scores["burnout_score"])),
+    ]
+    severity_priority = {"high": 3, "medium": 2, "info": 1}
+    metric_priority = {"focus": 4, "fatigue": 3, "distraction": 2, "burnout": 1}
+    candidates = [signal for signal in signals if signal[2]["alert"]]
+    candidates.sort(
+        key=lambda signal: (
+            severity_priority.get(signal[2].get("severity", "info"), 0),
+            metric_priority[signal[0]],
+        ),
+        reverse=True,
+    )
+    strongest = candidates[0] if candidates else None
+    if strongest is None and app_switches < 50:
+        return []
+
+    confidence = round(float(scores["confidence"]) * 100)
+    if confidence < 70:
+        return [
+            AlertResult(
+                alert_type="context_quality",
+                severity="info",
+                title="Add context before acting",
+                message=(
+                    "A possible attention or load signal is visible, but the estimate needs more "
+                    "context before it should guide a warning."
+                ),
+                reason=(
+                    f"Data completeness is {confidence}%. Category totals alone cannot explain "
+                    "timing or switching pressure."
+                ),
+                action=(
+                    "Add app switches, late-night minutes, or deep-work minutes, then run the "
+                    "analysis again."
+                ),
+            )
+        ]
+
+    if strongest is None:
+        return [
+            AlertResult(
+                alert_type="attention_switching",
+                severity="medium",
+                title="Frequent app switching",
+                message="Frequent switching may be fragmenting otherwise useful screen time.",
+                reason=f"{app_switches} app switches were recorded.",
+                action=(
+                    "Use focus mode for one 25-minute block and keep only the required app open."
+                ),
+            )
+        ]
+
+    metric, score, band = strongest
+    copy = {
+        "focus": (
+            "Focus support recommended",
+            f"Focus Potential is {score}/100, in the {str(band['label']).lower()} band.",
+        ),
+        "fatigue": (
+            "Mental load worth watching",
+            f"Mental Fatigue is {score}/100, in the {str(band['label']).lower()} band.",
+        ),
+        "distraction": (
+            "Attention fragmentation worth watching",
+            f"Distraction Load is {score}/100, in the {str(band['label']).lower()} band.",
+        ),
+        "burnout": (
+            "Recovery pressure worth watching",
+            f"The behavioral recovery-pressure signal is {score}/100. This is not a diagnosis.",
+        ),
+    }[metric]
+    return [
+        AlertResult(
+            alert_type=f"{metric}_signal",
+            severity=str(band["severity"]),
+            title=copy[0],
+            message=copy[1],
+            reason=str(scores["insights"][0]),
+            action=str(scores["primary_action"]["action"]),
+        )
+    ]
+
+
 def predict_cognitive_state(
     usage: dict[str, int],
     *,
@@ -76,18 +183,7 @@ def predict_cognitive_state(
         deep_work_minutes=deep_work_minutes,
         launch_count=launch_count,
     )
-    alerts: list[AlertResult] = []
-    if app_switches >= 50:
-        alerts.append(
-            AlertResult(
-                alert_type="attention_switching",
-                severity="medium",
-                title="Frequent app switching",
-                message="Frequent switching is associated with more fragmented work sessions.",
-                reason=f"{app_switches} app switches were recorded.",
-                action="Use focus mode for one 25-minute block and keep only the required app open.",
-            )
-        )
+    alerts = _build_score_alerts(scores, app_switches)
 
     return CognitiveResult(
         focus_score=int(scores["focus_score"]),
@@ -126,7 +222,8 @@ def mentor_language(question: str) -> str:
         "toi nen", "lam gi", "tai sao", "vi sao", "ngay mai", "cam thay",
         "tap trung", "met moi", "xao nhang", "kiet suc", "xu huong", "giup toi",
         "ban co", "giam bot", "thoi gian su dung", "cam on", "xin chao",
-        "cang thang", "thu gian", "oke",
+        "cang thang", "thu gian", "tom tat", "tong ket", "phan tich hom nay",
+        "bao cao hom nay", "oke",
     )
     return "vi" if any(character in source for character in vietnamese_characters) or any(
         phrase in normalized for phrase in vietnamese_phrases
@@ -139,6 +236,13 @@ def mentor_intent(question: str) -> str:
     def contains(*terms: str) -> bool:
         return any(term in normalized for term in terms)
 
+    requests_english_summary = contains("summarize", "summarise", "summary", "recap") and contains(
+        "today", "daily", "analysis", "analyze", "analyse"
+    )
+    requests_vietnamese_summary = contains("tom tat", "tong ket", "bao cao", "phan tich") and contains(
+        "hom nay", "ngay hom nay"
+    )
+
     if normalized.rstrip(".! ") in {"ok", "oke", "okay", "u", "uh", "uhm", "um", "duoc", "hieu roi", "got it"}:
         return "acknowledge"
     if contains("thank you", "thanks", "cam on"):
@@ -147,6 +251,15 @@ def mentor_intent(question: str) -> str:
         return "greeting"
     if contains("what can you do", "how can you help", "ban lam duoc gi", "ban co the lam gi", "co the hoi gi"):
         return "capabilities"
+    if requests_english_summary or requests_vietnamese_summary or contains(
+        "summarize today", "summarise today", "today summary", "today's summary",
+        "daily summary", "analyze today", "analyse today", "today's analysis",
+        "my analysis today", "review today", "today overview", "today recap",
+        "summarize my analysis", "summarise my analysis", "tom tat hom nay",
+        "tong ket hom nay", "phan tich hom nay", "bao cao hom nay",
+        "xem lai hom nay", "hom nay the nao",
+    ):
+        return "daily_summary"
     if contains(
         "reduce screen time", "use my phone less", "use less", "cut down",
         "too much screen time", "giam thoi gian", "giam bot thoi gian",
@@ -220,7 +333,7 @@ def build_mentor_response(
     question: str,
     result: CognitiveResult,
     recent_history: list[dict] | None = None,
-) -> dict[str, str | list[str]]:
+) -> MentorResponsePayload:
     history = recent_history or []
     language = mentor_language(question)
     intent = mentor_intent(question)
@@ -235,13 +348,13 @@ def build_mentor_response(
             "acknowledge": "Ừ, mình hiểu rồi. Bạn cứ hỏi tiếp điều bạn muốn biết về screen time hoặc kế hoạch ngày mai nhé.",
             "thanks": "Không có gì. Mình ở đây nếu bạn muốn xem lại dữ liệu hoặc chọn một bước nhỏ cho ngày mai.",
             "greeting": "Chào bạn. Mình có thể giúp giải thích điểm số, xem yếu tố ảnh hưởng, điều chỉnh screen time hoặc lập kế hoạch cho ngày mai.",
-            "capabilities": "Bạn có thể hỏi mình: vì sao điểm tập trung thay đổi, có nên giảm screen time không, nhóm app nào ảnh hưởng nhiều nhất, xu hướng tuần này, hoặc nên làm gì ngày mai.",
+            "capabilities": "Bạn có thể yêu cầu tóm tắt hôm nay, hỏi vì sao điểm tập trung thay đổi, có nên giảm screen time không, xem xu hướng tuần này hoặc lập kế hoạch cho ngày mai.",
         },
         "en": {
             "acknowledge": "Got it. Ask me anything else about your screen time or tomorrow's plan.",
             "thanks": "You're welcome. I can help review the data or choose one small next step whenever you want.",
             "greeting": "Hello. I can explain your scores, identify the strongest contributor, help adjust screen time, or plan tomorrow.",
-            "capabilities": "You can ask why focus changed, whether to reduce screen time, which app category mattered most, what the week shows, or what to do tomorrow.",
+            "capabilities": "You can ask for today's summary, why focus changed, whether to reduce screen time, what the week shows, or what to do tomorrow.",
         },
     }
     if intent in basic_answers[language]:
@@ -266,6 +379,13 @@ def build_mentor_response(
             answer = (
                 "Mình chưa có ảnh chụp dữ liệu hợp lệ để trả lời dựa trên thông tin của bạn. "
                 "Hãy kiểm tra và lưu tổng thời gian hôm nay trước."
+            )
+        elif intent == "daily_summary":
+            answer = (
+                f"Tóm tắt hôm nay: bạn đã ghi nhận {result.total_minutes} phút sử dụng màn hình. "
+                f"{category_vi} là nhóm chính, chiếm {category_share:.0%}. Ước tính gồm tập trung "
+                f"{result.focus_score}/100, mệt mỏi {result.fatigue_score}/100 và xao nhãng "
+                f"{result.distraction_score}/100. {trend_vi} Hành động ưu tiên: {action_vi}"
             )
         elif intent == "screen_time":
             reducible_categories = ("social", "games", "entertainment")
@@ -316,8 +436,8 @@ def build_mentor_response(
             )
         else:
             answer = (
-                "Mình chưa hiểu rõ câu hỏi đó. Bạn có thể nói cụ thể hơn, ví dụ: 'Tôi có nên giảm "
-                "screen time không?', 'Vì sao điểm tập trung thay đổi?' hoặc 'Lập kế hoạch cho ngày mai'."
+                "Mình chưa hiểu rõ câu hỏi đó. Bạn có thể nói cụ thể hơn, ví dụ: 'Tóm tắt hôm nay', "
+                "'Vì sao điểm tập trung thay đổi?' hoặc 'Lập kế hoạch cho ngày mai'."
             )
         return {
             "language": "vi",
@@ -334,6 +454,13 @@ def build_mentor_response(
         answer = (
             "I do not have a complete saved snapshot to reason from yet. Review today's category "
             "totals and save them, then I can explain the strongest pattern without guessing."
+        )
+    elif intent == "daily_summary":
+        answer = (
+            f"Today's summary: {result.total_minutes} minutes of screen time were recorded. "
+            f"{category} was the main category at {category_share:.0%}. The estimates are focus "
+            f"{result.focus_score}/100, fatigue {result.fatigue_score}/100, and distraction "
+            f"{result.distraction_score}/100. {trend} Priority action: {action}"
         )
     elif intent == "screen_time":
         reducible_categories = ("social", "games", "entertainment")
@@ -385,8 +512,8 @@ def build_mentor_response(
         )
     else:
         answer = (
-            "I did not fully understand that question. Try asking whether to reduce screen time, "
-            "why focus changed, what affected today's score, or how to plan tomorrow."
+            "I did not fully understand that question. Try asking for today's summary, why focus "
+            "changed, what affected today's score, or how to plan tomorrow."
         )
 
     return {

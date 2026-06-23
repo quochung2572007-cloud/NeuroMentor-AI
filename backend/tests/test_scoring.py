@@ -12,7 +12,7 @@ from app.services.intelligence_engine import (
     mentor_language,
     predict_cognitive_state,
 )
-from app.services.scoring import calculate_scores, normalize_usage, validate_context
+from app.services.scoring import calculate_scores, normalize_usage, score_band, validate_context
 
 FIXTURES = json.loads(
     (Path(__file__).parents[2] / "tests" / "fixtures" / "scoring_cases.json").read_text(
@@ -35,6 +35,42 @@ class ScoringTests(unittest.TestCase):
         )
         self.assertFalse(validation["valid"])
         self.assertIn("add up to 90 minutes", validation["errors"][0])
+
+    def test_shared_score_bands_use_product_guidance_thresholds(self) -> None:
+        self.assertEqual(score_band("focus", 34)["key"], "needs-attention")
+        self.assertEqual(score_band("focus", 35)["key"], "building")
+        self.assertEqual(score_band("focus", 55)["key"], "steady")
+        self.assertEqual(score_band("focus", 75)["key"], "strong")
+        self.assertEqual(score_band("fatigue", 44)["key"], "moderate")
+        self.assertEqual(score_band("fatigue", 45)["key"], "watch")
+        self.assertEqual(score_band("fatigue", 70)["key"], "high")
+        self.assertEqual(score_band("distraction", 44)["key"], "moderate")
+        self.assertEqual(score_band("distraction", 45)["key"], "watch")
+        self.assertEqual(score_band("distraction", 70)["key"], "high")
+        self.assertEqual(score_band("burnout", 49)["key"], "moderate")
+        self.assertEqual(score_band("burnout", 50)["key"], "elevated")
+        self.assertEqual(score_band("burnout", 75)["key"], "high")
+
+    def test_score_alerts_require_sufficient_context(self) -> None:
+        incomplete = predict_cognitive_state({"games": 600})
+        self.assertEqual(incomplete.alerts[0].alert_type, "context_quality")
+        self.assertEqual(incomplete.alerts[0].severity, "info")
+
+        complete = predict_cognitive_state(
+            {"games": 600},
+            app_switches=50,
+            late_night_minutes=60,
+            deep_work_minutes=25,
+            launch_count=20,
+        )
+        self.assertEqual(complete.alerts[0].alert_type, "focus_signal")
+        self.assertEqual(complete.alerts[0].severity, "high")
+        self.assertTrue(complete.alerts[0].action)
+
+        supported = predict_cognitive_state(
+            {"productivity": 120}, app_switches=5, deep_work_minutes=30
+        )
+        self.assertEqual(supported.alerts, [])
 
     def test_empty_context_has_zero_scores(self) -> None:
         result = calculate_scores({})
@@ -147,6 +183,30 @@ class MentorTests(unittest.TestCase):
         response = build_mentor_response("Toi nen lam gi ngay mai?", self.result)
         self.assertEqual(response["language"], "vi")
         self.assertIn("Kế hoạch", response["answer"])
+
+    def test_daily_summary_intent_handles_natural_and_imperfect_questions(self) -> None:
+        english_questions = (
+            "Analyze today",
+            "Can you summarize the analyze me today?",
+            "Give me today's summary",
+        )
+        for question in english_questions:
+            with self.subTest(question=question):
+                self.assertEqual(mentor_intent(question), "daily_summary")
+                response = build_mentor_response(question, self.result)
+                self.assertEqual(response["language"], "en")
+                self.assertIn("Today's summary", response["answer"])
+                self.assertIn(f"focus {self.result.focus_score}/100", response["answer"])
+                self.assertIn("Priority action", response["answer"])
+
+        vietnamese_questions = ("Tóm tắt hôm nay", "Tom tat ngay hom nay")
+        for question in vietnamese_questions:
+            with self.subTest(question=question):
+                self.assertEqual(mentor_language(question), "vi")
+                self.assertEqual(mentor_intent(question), "daily_summary")
+                response = build_mentor_response(question, self.result)
+                self.assertIn("Tóm tắt hôm nay", response["answer"])
+                self.assertIn("Hành động ưu tiên", response["answer"])
 
     def test_basic_conversation_does_not_repeat_default_report(self) -> None:
         acknowledgement = build_mentor_response("oke", self.result)

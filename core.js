@@ -258,6 +258,37 @@
     return matches;
   }
 
+  function classifyUsageScreenshot(rawItems = []) {
+    const texts = rawItems
+      .map((item) => {
+        const source = typeof item === "string" ? { text: item } : (item || {});
+        return String(source.text || source.rawValue || "").replace(/\s+/g, " ").trim();
+      })
+      .filter(Boolean);
+    const normalizedText = normalizeSearchText(texts.join(" "));
+    const durationCount = texts.filter((text) => {
+      const minutes = parseScreenDuration(text);
+      return minutes !== null && minutes > 0;
+    }).length;
+    const percentageCount = texts.filter((text) => (
+      /\d{1,3}(?:[.,]\d{1,2})?\s*%/.test(text)
+    )).length;
+    const hasBatteryContext = /(?:muc|mirc)\s+(?:su|sir)\s+dung\s+pin|su dung pin|battery (?:usage|use)|power usage/.test(
+      normalizedText,
+    );
+
+    if (durationCount > 0) {
+      return { kind: "screen-time", duration_count: durationCount, percentage_count: percentageCount };
+    }
+    if (hasBatteryContext && percentageCount >= 1) {
+      return { kind: "battery-percentages", duration_count: 0, percentage_count: percentageCount };
+    }
+    if (percentageCount >= 2) {
+      return { kind: "percentage-only", duration_count: 0, percentage_count: percentageCount };
+    }
+    return { kind: "unknown", duration_count: 0, percentage_count: percentageCount };
+  }
+
   function validateContext(context = {}) {
     const normalized = normalizeContext(context);
     const categoryTotal = totalMinutes(normalized.usage);
@@ -304,25 +335,37 @@
     };
   }
 
-  function scoreLabel(metric, score) {
+  function scoreBand(metric, score) {
+    const value = Math.round(clamp(finiteNumber(score), 0, 100));
+
     if (metric === "focus") {
-      if (score >= 75) return "Strong support";
-      if (score >= 55) return "Steady potential";
-      if (score >= 35) return "Building support";
-      return "Needs attention";
+      if (value >= 75) return { key: "strong", label: "Strong support", tone: "positive", alert: false };
+      if (value >= 55) return { key: "steady", label: "Steady potential", tone: "positive", alert: false };
+      if (value >= 35) return { key: "building", label: "Building support", tone: "warning", alert: false };
+      return {
+        key: "needs-attention",
+        label: "Needs attention",
+        tone: "danger",
+        alert: true,
+        severity: value < 25 ? "high" : "medium",
+      };
     }
 
     if (metric === "burnout") {
-      if (score >= 75) return "High signal";
-      if (score >= 50) return "Elevated signal";
-      if (score >= 25) return "Worth watching";
-      return "Low signal";
+      if (value >= 75) return { key: "high", label: "High recovery pressure", tone: "danger", alert: true, severity: "high" };
+      if (value >= 50) return { key: "elevated", label: "Elevated signal", tone: "warning", alert: true, severity: "medium" };
+      if (value >= 25) return { key: "moderate", label: "Moderate signal", tone: "neutral", alert: false };
+      return { key: "low", label: "Low pressure", tone: "positive", alert: false };
     }
 
-    if (score >= 70) return "High signal";
-    if (score >= 45) return "Worth watching";
-    if (score >= 20) return "Moderate signal";
-    return "Well managed";
+    if (value >= 70) return { key: "high", label: "High signal", tone: "danger", alert: true, severity: "high" };
+    if (value >= 45) return { key: "watch", label: "Worth watching", tone: "warning", alert: true, severity: "medium" };
+    if (value >= 20) return { key: "moderate", label: "Moderate signal", tone: "neutral", alert: false };
+    return { key: "managed", label: "Well managed", tone: "positive", alert: false };
+  }
+
+  function scoreLabel(metric, score) {
+    return scoreBand(metric, score).label;
   }
 
   function burnoutRisk(score) {
@@ -330,6 +373,77 @@
     if (score >= 50) return "Elevated";
     if (score >= 25) return "Moderate";
     return "Low";
+  }
+
+  function buildScoreAlerts(context, result) {
+    if (!result.total_minutes) return [];
+
+    const signals = [
+      { metric: "focus", score: result.focus_score },
+      { metric: "fatigue", score: result.fatigue_score },
+      { metric: "distraction", score: result.distraction_score },
+      { metric: "burnout", score: result.burnout_score },
+    ].map((signal) => ({ ...signal, band: scoreBand(signal.metric, signal.score) }));
+    const priority = { high: 3, medium: 2, info: 1 };
+    const metricPriority = { focus: 4, fatigue: 3, distraction: 2, burnout: 1 };
+    const strongest = signals
+      .filter((signal) => signal.band.alert)
+      .sort((left, right) => (
+        (priority[right.band.severity] - priority[left.band.severity])
+        || (metricPriority[right.metric] - metricPriority[left.metric])
+      ))[0];
+
+    if (!strongest && context.app_switches < 50) return [];
+
+    if (result.confidence < 70) {
+      return [{
+        alert_type: "context_quality",
+        severity: "info",
+        title: "Add context before acting",
+        message: "A possible attention or load signal is visible, but the estimate needs more context before it should guide a warning.",
+        reason: `Data completeness is ${result.confidence}%. Category totals alone cannot explain timing or switching pressure.`,
+        action: "Add app switches, late-night minutes, or deep-work minutes, then run the analysis again.",
+      }];
+    }
+
+    if (!strongest) {
+      return [{
+        alert_type: "attention_switching",
+        severity: "medium",
+        title: "Frequent app switching",
+        message: "Frequent switching may be fragmenting otherwise useful screen time.",
+        reason: `${context.app_switches} app switches were recorded.`,
+        action: "Use focus mode for one 25-minute block and keep only the required app open.",
+      }];
+    }
+
+    const copy = {
+      focus: {
+        title: "Focus support recommended",
+        message: `Focus Potential is ${strongest.score}/100, in the ${strongest.band.label.toLowerCase()} band.`,
+      },
+      fatigue: {
+        title: "Mental load worth watching",
+        message: `Mental Fatigue is ${strongest.score}/100, in the ${strongest.band.label.toLowerCase()} band.`,
+      },
+      distraction: {
+        title: "Attention fragmentation worth watching",
+        message: `Distraction Load is ${strongest.score}/100, in the ${strongest.band.label.toLowerCase()} band.`,
+      },
+      burnout: {
+        title: "Recovery pressure worth watching",
+        message: `The behavioral recovery-pressure signal is ${strongest.score}/100. This is not a diagnosis.`,
+      },
+    }[strongest.metric];
+    const factor = result.factors.find((item) => item.metrics.includes(strongest.metric));
+    return [{
+      alert_type: `${strongest.metric}_signal`,
+      severity: strongest.band.severity,
+      title: copy.title,
+      message: copy.message,
+      reason: factor?.evidence || result.insights[0],
+      action: result.primary_action.action,
+    }];
   }
 
   function dominantCategory(usage) {
@@ -619,6 +733,8 @@
       source: "local-model",
     };
 
+    result.alerts = buildScoreAlerts(context, result);
+
     return result;
   }
 
@@ -836,7 +952,7 @@
       "toi nen", "lam gi", "tai sao", "vi sao", "ngay mai", "cam thay", "tap trung",
       "met moi", "xao nhang", "kiet suc", "xu huong", "man hinh", "giup toi",
       "ban co", "giam bot", "thoi gian su dung", "cam on", "xin chao", "cang thang",
-      "thu gian", "oke",
+      "thu gian", "tom tat", "tong ket", "phan tich hom nay", "bao cao hom nay", "oke",
     ].some((phrase) => normalized.includes(phrase));
     return hasVietnameseCharacter || hasVietnamesePhrase ? "vi" : "en";
   }
@@ -844,11 +960,22 @@
   function detectMentorIntent(question = "") {
     const normalized = normalizeMentorText(question);
     const matches = (terms) => terms.some((term) => normalized.includes(term));
+    const requestsEnglishSummary = matches(["summarize", "summarise", "summary", "recap"])
+      && matches(["today", "daily", "analysis", "analyze", "analyse"]);
+    const requestsVietnameseSummary = matches(["tom tat", "tong ket", "bao cao", "phan tich"])
+      && matches(["hom nay", "ngay hom nay"]);
 
     if (/^(?:ok+|oke+|okay|u|uh|uhm|um|duoc|hieu roi|got it)[.!\s]*$/.test(normalized)) return "acknowledge";
     if (matches(["thank you", "thanks", "cam on", "cảm ơn"])) return "thanks";
     if (matches(["hello", "hi there", "good morning", "good evening", "xin chao", "chao ban"])) return "greeting";
     if (matches(["what can you do", "how can you help", "ban lam duoc gi", "ban co the lam gi", "co the hoi gi"])) return "capabilities";
+    if (requestsEnglishSummary || requestsVietnameseSummary || matches([
+      "summarize today", "summarise today", "today summary", "today's summary", "daily summary",
+      "analyze today", "analyse today", "today's analysis", "my analysis today", "review today",
+      "today overview", "today recap", "summarize my analysis", "summarise my analysis",
+      "tom tat hom nay", "tong ket hom nay", "phan tich hom nay", "bao cao hom nay",
+      "xem lai hom nay", "hom nay the nao",
+    ])) return "daily_summary";
     if (matches([
       "reduce screen time", "use my phone less", "use less", "cut down", "too much screen time",
       "giam thoi gian", "giam bot thoi gian", "giam screen time", "co nen giam", "dung dien thoai it",
@@ -911,13 +1038,13 @@
           acknowledge: "Ừ, mình hiểu rồi. Bạn cứ hỏi tiếp điều bạn muốn biết về screen time hoặc kế hoạch ngày mai nhé.",
           thanks: "Không có gì. Mình ở đây nếu bạn muốn xem lại dữ liệu hoặc chọn một bước nhỏ cho ngày mai.",
           greeting: "Chào bạn. Mình có thể giúp giải thích điểm số, xem yếu tố ảnh hưởng, điều chỉnh screen time hoặc lập kế hoạch cho ngày mai.",
-          capabilities: "Bạn có thể hỏi mình: vì sao điểm tập trung thay đổi, có nên giảm screen time không, nhóm app nào ảnh hưởng nhiều nhất, xu hướng tuần này, hoặc nên làm gì ngày mai.",
+          capabilities: "Bạn có thể yêu cầu tóm tắt hôm nay, hỏi vì sao điểm tập trung thay đổi, có nên giảm screen time không, xem xu hướng tuần này hoặc lập kế hoạch cho ngày mai.",
         }
       : {
           acknowledge: "Got it. Ask me anything else about your screen time or tomorrow's plan.",
           thanks: "You're welcome. I can help review the data or choose one small next step whenever you want.",
           greeting: "Hello. I can explain your scores, identify the strongest contributor, help adjust screen time, or plan tomorrow.",
-          capabilities: "You can ask why focus changed, whether to reduce screen time, which app category mattered most, what the week shows, or what to do tomorrow.",
+          capabilities: "You can ask for today's summary, why focus changed, whether to reduce screen time, what the week shows, or what to do tomorrow.",
         };
     if (basicAnswers[intent]) {
       return { language, intent, answer: basicAnswers[intent], evidence: "", action: "" };
@@ -947,7 +1074,9 @@
       const dominantLabelVi = CATEGORY_LABELS_VI[result.dominant_category];
       const evidenceVi = `${dominantLabelVi} chiếm ${dominantPercent}% thời gian màn hình đã ghi nhận.`;
       const actionVi = vietnameseAction(result.primary_action);
-      if (intent === "screen_time") {
+      if (intent === "daily_summary") {
+        answer = `Tóm tắt hôm nay: bạn đã ghi nhận ${result.total_minutes} phút sử dụng màn hình. ${dominantLabelVi} là nhóm chính, chiếm ${dominantPercent}%. Ước tính gồm tập trung ${result.focus_score}/100, mệt mỏi ${result.fatigue_score}/100 và xao nhãng ${result.distraction_score}/100. ${vietnameseHistorySentence(snapshot, snapshots)} Hành động ưu tiên: ${actionVi}`;
+      } else if (intent === "screen_time") {
         const reducibleCategories = ["social", "games", "entertainment"];
         const reducibleCategory = reducibleCategories.reduce((largest, category) => (
           result.usage[category] > result.usage[largest] ? category : largest
@@ -975,12 +1104,17 @@
       } else if (intent === "metric") {
         answer = `Ước tính tập trung mới nhất là ${result.focus_score}/100 với độ tin cậy ${result.confidence}%. ${evidenceVi} ${vietnameseHistorySentence(snapshot, snapshots)}`;
       } else {
-        answer = "Mình chưa hiểu rõ câu hỏi đó. Bạn có thể nói cụ thể hơn, ví dụ: “Tôi có nên giảm screen time không?”, “Vì sao điểm tập trung thay đổi?” hoặc “Lập kế hoạch cho ngày mai”.";
+        answer = "Mình chưa hiểu rõ câu hỏi đó. Bạn có thể nói cụ thể hơn, ví dụ: “Tóm tắt hôm nay”, “Vì sao điểm tập trung thay đổi?” hoặc “Lập kế hoạch cho ngày mai”.";
       }
       return { language, intent, answer, evidence: evidenceVi, action: actionVi };
     }
 
-    if (intent === "screen_time") {
+    if (intent === "daily_summary") {
+      answer =
+        `Today's summary: ${result.total_minutes} minutes of screen time were recorded. ${dominantLabel} was the main category at ${dominantPercent}%. ` +
+        `The estimates are focus ${result.focus_score}/100, fatigue ${result.fatigue_score}/100, and distraction ${result.distraction_score}/100. ` +
+        `${historySentence(snapshot, snapshots)} Priority action: ${action}`;
+    } else if (intent === "screen_time") {
       const reducibleCategories = ["social", "games", "entertainment"];
       const reducibleCategory = reducibleCategories.reduce((largest, category) => (
         result.usage[category] > result.usage[largest] ? category : largest
@@ -1021,7 +1155,7 @@
         `Your latest focus estimate is ${result.focus_score}/100 (${result.labels.focus.toLowerCase()}) with ${result.confidence}% model confidence. ` +
         `${evidence} ${historySentence(snapshot, snapshots)}`;
     } else {
-      answer = "I did not fully understand that question. Try asking whether to reduce screen time, why focus changed, what affected today's score, or how to plan tomorrow.";
+      answer = "I did not fully understand that question. Try asking for today's summary, why focus changed, what affected today's score, or how to plan tomorrow.";
     }
 
     return { language, intent, answer, evidence, action };
@@ -1031,11 +1165,13 @@
     SCHEMA_VERSION,
     CATEGORIES,
     CATEGORY_LABELS,
+    scoreBand,
     localDateKey,
     normalizeUsage,
     parseScreenDuration,
     extractAppNameCandidate,
     pairOcrUsageRows,
+    classifyUsageScreenshot,
     normalizeContext,
     totalMinutes,
     validateContext,

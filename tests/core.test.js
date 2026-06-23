@@ -42,6 +42,51 @@ test('validation rejects a reported-total mismatch', () => {
   assert.match(validation.errors[0], /add up to 90 minutes/i);
 });
 
+test('shared score bands use the same product guidance thresholds', () => {
+  assert.strictEqual(Core.scoreBand('focus', 34).key, 'needs-attention');
+  assert.strictEqual(Core.scoreBand('focus', 35).key, 'building');
+  assert.strictEqual(Core.scoreBand('focus', 55).key, 'steady');
+  assert.strictEqual(Core.scoreBand('focus', 75).key, 'strong');
+
+  assert.strictEqual(Core.scoreBand('fatigue', 44).key, 'moderate');
+  assert.strictEqual(Core.scoreBand('fatigue', 45).key, 'watch');
+  assert.strictEqual(Core.scoreBand('fatigue', 70).key, 'high');
+
+  assert.strictEqual(Core.scoreBand('distraction', 44).key, 'moderate');
+  assert.strictEqual(Core.scoreBand('distraction', 45).key, 'watch');
+  assert.strictEqual(Core.scoreBand('distraction', 70).key, 'high');
+
+  assert.strictEqual(Core.scoreBand('burnout', 49).key, 'moderate');
+  assert.strictEqual(Core.scoreBand('burnout', 50).key, 'elevated');
+  assert.strictEqual(Core.scoreBand('burnout', 75).key, 'high');
+});
+
+test('score alerts require enough context before showing a behavioral warning', () => {
+  const incomplete = Core.calculatePrediction({ usage: { games: 600 } });
+  assert.strictEqual(incomplete.alerts.length, 1);
+  assert.strictEqual(incomplete.alerts[0].alert_type, 'context_quality');
+  assert.strictEqual(incomplete.alerts[0].severity, 'info');
+
+  const complete = Core.calculatePrediction({
+    usage: { games: 600 },
+    app_switches: 50,
+    late_night_minutes: 60,
+    deep_work_minutes: 25,
+    app_launches: 20,
+  });
+  assert.strictEqual(complete.alerts.length, 1);
+  assert.strictEqual(complete.alerts[0].alert_type, 'focus_signal');
+  assert.strictEqual(complete.alerts[0].severity, 'high');
+  assert.ok(complete.alerts[0].action);
+
+  const supported = Core.calculatePrediction({
+    usage: { productivity: 120 },
+    app_switches: 5,
+    deep_work_minutes: 30,
+  });
+  assert.deepStrictEqual(supported.alerts, []);
+});
+
 test('unknown OCR app names remain available for user classification', () => {
   assert.strictEqual(Core.extractAppNameCandidate('WorkZone.io 3%'), 'WorkZone.io');
   assert.strictEqual(Core.extractAppNameCandidate('Ariana'), 'Ariana');
@@ -60,6 +105,34 @@ test('Vietnamese screen-time durations are converted to minutes', () => {
   assert.strictEqual(Core.parseScreenDuration('1g 46ph'), 106);
   assert.strictEqual(Core.parseScreenDuration('51ph'), 51);
   assert.strictEqual(Core.parseScreenDuration('24 phút'), 24);
+});
+
+test('battery percentages are rejected as screen-time durations', () => {
+  const detection = Core.classifyUsageScreenshot([
+    { text: 'Mức sử dụng pin' },
+    { text: 'Hôm nay' },
+    { text: 'YouTube' },
+    { text: '38,81%' },
+    { text: 'Instagram' },
+    { text: '20,03%' },
+    { text: 'TikTok' },
+    { text: '18,68%' },
+  ]);
+  assert.strictEqual(detection.kind, 'battery-percentages');
+  assert.strictEqual(detection.duration_count, 0);
+  assert.strictEqual(detection.percentage_count, 3);
+});
+
+test('screenshots with app durations remain valid for OCR extraction', () => {
+  const detection = Core.classifyUsageScreenshot([
+    { text: 'Battery Usage' },
+    { text: 'Messenger' },
+    { text: '2h 16m on screen' },
+    { text: 'Facebook' },
+    { text: '35m on screen' },
+  ]);
+  assert.strictEqual(detection.kind, 'screen-time');
+  assert.strictEqual(detection.duration_count, 2);
 });
 
 test('OCR rows pair app names with nearby usage times and ignore interface headings', () => {
@@ -197,6 +270,12 @@ test('trend logic keeps missing days empty instead of inventing zero scores', ()
   assert.strictEqual(trend.available_days, 1);
   assert.strictEqual(trend.slots.filter(slot => slot.missing).length, 6);
   assert.strictEqual(trend.slots[0].focus, null);
+
+  const thirtyDayTrend = Core.buildTrend([snapshot], '2026-06-20', 30);
+  assert.strictEqual(thirtyDayTrend.slots.length, 30);
+  assert.strictEqual(thirtyDayTrend.available_days, 1);
+  assert.strictEqual(thirtyDayTrend.slots.filter(slot => slot.missing).length, 29);
+  assert.strictEqual(thirtyDayTrend.slots.at(-1).focus, snapshot.result.focus_score);
 });
 
 test('same-day analysis replaces the trend value with the latest snapshot', () => {
@@ -272,4 +351,30 @@ test('Mentor handles basic conversation without repeating the default report', (
   const unknown = Core.buildMentorResponse('Câu này hơi khác một chút', snapshot, [snapshot]);
   assert.strictEqual(unknown.intent, 'general');
   assert.match(unknown.answer, /chưa hiểu rõ/i);
+});
+
+test('Mentor summarizes the latest daily snapshot in English and Vietnamese', () => {
+  const snapshot = Core.createDailySnapshot({ date: '2026-06-20', context: fixtures[0].context });
+  const englishQuestions = [
+    'Analyze today',
+    'Can you summarize the analyze me today?',
+    "Give me today's summary",
+  ];
+  englishQuestions.forEach(question => {
+    const response = Core.buildMentorResponse(question, snapshot, [snapshot]);
+    assert.strictEqual(response.intent, 'daily_summary');
+    assert.strictEqual(response.language, 'en');
+    assert.match(response.answer, /today's summary/i);
+    assert.match(response.answer, new RegExp(`focus ${snapshot.result.focus_score}\\/100`, 'i'));
+    assert.match(response.answer, /priority action/i);
+  });
+
+  const vietnameseQuestions = ['Tóm tắt hôm nay', 'Tom tat ngay hom nay'];
+  vietnameseQuestions.forEach(question => {
+    const response = Core.buildMentorResponse(question, snapshot, [snapshot]);
+    assert.strictEqual(response.intent, 'daily_summary');
+    assert.strictEqual(response.language, 'vi');
+    assert.match(response.answer, /Tóm tắt hôm nay/i);
+    assert.match(response.answer, /Hành động ưu tiên/i);
+  });
 });

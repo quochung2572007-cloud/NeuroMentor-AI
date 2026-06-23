@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from sqlalchemy import create_engine, event
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.database import Base
 from app.models import (
@@ -37,7 +37,7 @@ class EmailReminderSchedulerTests(unittest.TestCase):
 
         Base.metadata.create_all(self.engine)
         self.Session = sessionmaker(bind=self.engine)
-        self.sessions = []
+        self.sessions: list[Session] = []
 
     def tearDown(self) -> None:
         for session in self.sessions:

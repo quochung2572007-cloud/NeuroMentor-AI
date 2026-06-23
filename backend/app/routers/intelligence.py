@@ -6,7 +6,11 @@ from app.schemas.intelligence import (
     MentorRequest,
     MentorResponse,
 )
-from app.services.intelligence_engine import build_mentor_response, predict_cognitive_state
+from app.services.intelligence_engine import (
+    MentorResponsePayload,
+    build_mentor_response,
+    predict_cognitive_state,
+)
 
 router = APIRouter(prefix="/intelligence", tags=["intelligence"])
 
@@ -27,7 +31,7 @@ def predict(body: CognitiveContext) -> dict:
 
 
 @router.post("/chat", response_model=MentorResponse)
-def chat(body: MentorRequest) -> dict:
+def chat(body: MentorRequest) -> MentorResponsePayload:
     result = _predict(body.context)
     return build_mentor_response(
         body.question,

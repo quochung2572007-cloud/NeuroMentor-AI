@@ -10,7 +10,7 @@
   <link rel="manifest" href="site.webmanifest" />
   <script src="runtime.js?v=20260620-shared-snapshot"></script>
   <script src="config.js?v=20260620-shared-snapshot"></script>
-  <link rel="stylesheet" href="popup.css?v=20260623-dark-atmospheres" />
+  <link rel="stylesheet" href="popup.css?v=20260623-single-metric" />
 </head>
 <body>
   <section id="auth-view" class="auth-view" aria-labelledby="auth-title">
@@ -310,6 +310,16 @@
               <p id="recommendation-text">
                 Enter today's app usage to receive one clear, achievable next step.
               </p>
+              <div class="action-proof">
+                <div>
+                  <span>Why this</span>
+                  <strong id="recommendation-reason">Waiting for today's strongest signal.</strong>
+                </div>
+                <div>
+                  <span>Check again</span>
+                  <strong id="recommendation-review">Log tomorrow's snapshot and compare with your baseline.</strong>
+                </div>
+              </div>
             </div>
             <button class="primary-button compact-button" type="button" data-screen-target="analyze">
               Analyze today
@@ -327,7 +337,7 @@
           </div>
 
           <div class="explain-metric-grid">
-            <details class="explain-metric focus-metric">
+            <details id="focus-metric" class="explain-metric focus-metric">
               <summary title="Focus Potential estimates your capacity for sustained attention from today's usage pattern.">
                 <div>
                   <span class="metric-label">Focus Potential</span>
@@ -347,7 +357,7 @@
               </div>
             </details>
 
-            <details class="explain-metric fatigue-metric">
+            <details id="fatigue-metric" class="explain-metric fatigue-metric">
               <summary title="Mental Fatigue estimates cognitive load from screen volume, timing, and recovery signals.">
                 <div>
                   <span class="metric-label">Mental Fatigue</span>
@@ -367,7 +377,7 @@
               </div>
             </details>
 
-            <details class="explain-metric distraction-metric">
+            <details id="distraction-metric" class="explain-metric distraction-metric">
               <summary title="Distraction estimates attention fragmentation from app mix, switching, and launch behavior.">
                 <div>
                   <span class="metric-label">Distraction Load</span>
@@ -387,7 +397,7 @@
               </div>
             </details>
 
-            <details class="explain-metric burnout-metric">
+            <details id="burnout-metric" class="explain-metric burnout-metric">
               <summary title="Burnout Tendency is a behavioral wellness signal, not a medical diagnosis.">
                 <div>
                   <span class="metric-label">Burnout Tendency</span>
@@ -532,6 +542,7 @@
             <h2 id="alert-title">Attention signal</h2>
             <p id="alert-message"></p>
             <p id="alert-reason" class="alert-reason"></p>
+            <p id="alert-action" class="alert-action"></p>
           </div>
         </article>
       </section>
@@ -675,7 +686,7 @@
 
       <section id="screen-trends" class="screen" data-screen="trends">
         <div class="section-intro">
-          <p class="eyebrow">Seven-day analytics</p>
+          <p class="eyebrow">Recent analytics</p>
           <h1>Your baseline, not somebody else's.</h1>
           <p>Daily snapshots stay on this device and reveal patterns as your history grows.</p>
         </div>
@@ -684,7 +695,7 @@
           <div class="card-heading">
             <div>
               <p class="eyebrow">Focus trend</p>
-              <h2>Last seven days</h2>
+              <h2>Last 30 days</h2>
             </div>
             <span id="trend-direction" class="state-chip neutral">Building baseline</span>
           </div>
@@ -710,7 +721,18 @@
           <p id="trend-coverage-note" class="trend-coverage-note hidden" role="status">
             One day is recorded. Add another daily snapshot before interpreting this as a trend.
           </p>
-          <div id="trend-chart" class="trend-chart" aria-label="Seven-day focus score chart"></div>
+          <div id="trend-scroll-hint" class="trend-scroll-hint" aria-hidden="true">
+            <span>Older days</span>
+            <span>Latest</span>
+          </div>
+          <div
+            id="trend-chart-scroller"
+            class="trend-chart-scroller"
+            tabindex="0"
+            aria-label="Scrollable 30-day focus and fatigue history. Scroll left to view older days."
+          >
+            <div id="trend-chart" class="trend-chart" aria-label="30-day focus score chart"></div>
+          </div>
           <div id="trend-chart-legend" class="chart-legend">
             <span><i class="legend-focus"></i>Focus</span>
             <span><i class="legend-fatigue"></i>Fatigue</span>
@@ -770,6 +792,7 @@
         </div>
 
         <div class="prompt-chips" aria-label="Suggested mentor questions">
+          <button type="button" data-question="Can you summarize my analysis today?">Today's summary</button>
           <button type="button" data-question="What most influenced my focus today?">What changed?</button>
           <button type="button" data-question="What is the smallest useful action I can take tomorrow?">Plan tomorrow</button>
           <button type="button" data-question="How might I feel based on this pattern?">How might I feel?</button>
@@ -809,7 +832,7 @@
   </div>
 
   <script src="vendor/tesseract/tesseract.min.js?v=20260623-mentor-intents"></script>
-  <script src="core.js?v=20260623-mentor-intents"></script>
-  <script src="popup.js?v=20260623-mentor-intents"></script>
+  <script src="core.js?v=20260623-guidance-bands"></script>
+  <script src="popup.js?v=20260623-guidance-bands"></script>
 </body>
 </html>

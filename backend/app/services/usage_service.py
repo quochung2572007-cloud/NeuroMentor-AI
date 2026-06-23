@@ -13,7 +13,8 @@ from app.models import (
     UsageSession,
     User,
 )
-from app.services.report_engine import CATEGORIES, ReportResult, analyze_usage
+from app.services.report_engine import ReportResult, analyze_usage
+from app.services.scoring import CATEGORIES
 
 
 def _usage_dict_from_logs(logs: list[UsageCategoryLog]) -> dict[str, int]:

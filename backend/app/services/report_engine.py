@@ -16,7 +16,7 @@ class ReportResult:
     suggestions: list[str]
     notes: list[str]
     usage: dict[str, int]
-    features: dict[str, float | int]
+    features: dict[str, float | int | str]
 
 
 def analyze_usage(usage: dict[str, int]) -> ReportResult:

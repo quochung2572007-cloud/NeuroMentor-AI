@@ -1,6 +1,7 @@
 const API_ROOT = globalThis.NEUROMENTOR_CONFIG?.apiRoot || 'http://localhost:8000/v1';
 const API_BASE = `${API_ROOT}/intelligence`;
 const APP_LOCALE = 'en-US';
+const TREND_HISTORY_DAYS = 30;
 const Core = globalThis.NeuroMentorCore;
 
 if (!Core) {
@@ -135,23 +136,27 @@ const elements = {
   focusTrend: document.getElementById('focus-trend'),
   focusDetailScore: document.getElementById('focus-detail-score'),
   focusDetailLabel: document.getElementById('focus-detail-label'),
+  focusMetric: document.getElementById('focus-metric'),
   focusExplanation: document.getElementById('focus-explanation'),
   focusContributors: document.getElementById('focus-contributors'),
   focusConfidence: document.getElementById('focus-confidence'),
   focusComparison: document.getElementById('focus-comparison'),
   fatigueScore: document.getElementById('fatigue-score'),
   fatigueLabel: document.getElementById('fatigue-label'),
+  fatigueMetric: document.getElementById('fatigue-metric'),
   fatigueExplanation: document.getElementById('fatigue-explanation'),
   fatigueContributors: document.getElementById('fatigue-contributors'),
   fatigueConfidence: document.getElementById('fatigue-confidence'),
   fatigueComparison: document.getElementById('fatigue-comparison'),
   distractionScore: document.getElementById('distraction-score'),
   distractionLabel: document.getElementById('distraction-label'),
+  distractionMetric: document.getElementById('distraction-metric'),
   distractionExplanation: document.getElementById('distraction-explanation'),
   distractionContributors: document.getElementById('distraction-contributors'),
   distractionConfidence: document.getElementById('distraction-confidence'),
   distractionComparison: document.getElementById('distraction-comparison'),
   burnoutRisk: document.getElementById('burnout-risk'),
+  burnoutMetric: document.getElementById('burnout-metric'),
   burnoutScore: document.getElementById('burnout-score'),
   burnoutExplanation: document.getElementById('burnout-explanation'),
   burnoutContributors: document.getElementById('burnout-contributors'),
@@ -180,8 +185,11 @@ const elements = {
   alertTitle: document.getElementById('alert-title'),
   alertMessage: document.getElementById('alert-message'),
   alertReason: document.getElementById('alert-reason'),
+  alertAction: document.getElementById('alert-action'),
   recommendationTitle: document.getElementById('recommendation-title'),
   recommendationText: document.getElementById('recommendation-text'),
+  recommendationReason: document.getElementById('recommendation-reason'),
+  recommendationReview: document.getElementById('recommendation-review'),
   analysisForm: document.getElementById('analysis-form'),
   analyzeButton: document.getElementById('analyze-button'),
   analysisStatus: document.getElementById('analysis-status'),
@@ -199,6 +207,8 @@ const elements = {
   categoryTotal: document.getElementById('category-total'),
   validationSummary: document.getElementById('validation-summary'),
   trendChart: document.getElementById('trend-chart'),
+  trendChartScroller: document.getElementById('trend-chart-scroller'),
+  trendScrollHint: document.getElementById('trend-scroll-hint'),
   trendDirection: document.getElementById('trend-direction'),
   averageFocus: document.getElementById('average-focus'),
   averageFocusDetail: document.getElementById('average-focus-detail'),
@@ -1241,20 +1251,10 @@ function renderBreakdown(usage) {
   }).join('');
 }
 
-function supportiveScoreLabel(metric, score) {
-  if (metric === 'focus') {
-    if (score >= 70) return 'Well supported';
-    if (score >= 45) return 'Building momentum';
-    return 'Needs attention';
-  }
-  if (metric === 'burnout') {
-    if (score >= 70) return 'Recovery priority';
-    if (score >= 42) return 'Watch your load';
-    return 'Low pressure';
-  }
-  if (score <= 30) return 'Well managed';
-  if (score <= 55) return 'Worth watching';
-  return 'Needs support';
+function applyMetricBand(element, band, score, hasData) {
+  if (!element) return;
+  element.dataset.signal = hasData ? band.tone : 'neutral';
+  element.style.setProperty('--metric-score', hasData ? score : 0);
 }
 
 function renderContributorList(element, contributors) {
@@ -1547,16 +1547,25 @@ function renderOverview(snapshotOrPrediction) {
   const context = hasData ? snapshot.context : emptyContext();
   const confidence = hasData ? Math.round(result.confidence) : 0;
   const contributors = metricContributors(result, context);
-  const focusLabel = hasData ? supportiveScoreLabel('focus', result.focus_score) : 'No baseline';
+  const focusBand = Core.scoreBand('focus', result.focus_score);
+  const fatigueBand = Core.scoreBand('fatigue', result.fatigue_score);
+  const distractionBand = Core.scoreBand('distraction', result.distraction_score);
+  const burnoutBand = Core.scoreBand('burnout', result.burnout_score);
+  const focusLabel = hasData ? focusBand.label : 'No baseline';
+
+  applyMetricBand(elements.focusMetric, focusBand, result.focus_score, hasData);
+  applyMetricBand(elements.fatigueMetric, fatigueBand, result.fatigue_score, hasData);
+  applyMetricBand(elements.distractionMetric, distractionBand, result.distraction_score, hasData);
+  applyMetricBand(elements.burnoutMetric, burnoutBand, result.burnout_score, hasData);
 
   elements.focusRing.style.setProperty('--score', result.focus_score);
   elements.focusScore.textContent = result.focus_score;
-  elements.focusLabel.className = `state-chip ${hasData && result.focus_score < 45 ? 'warning' : 'neutral'}`;
+  elements.focusLabel.className = `state-chip ${hasData ? focusBand.tone : 'neutral'}`;
   elements.focusLabel.textContent = focusLabel;
   elements.scoreHeadline.textContent = hasData
-    ? result.focus_score >= 70
+    ? ['strong', 'steady'].includes(focusBand.key)
       ? 'Your attention has a strong foundation today.'
-      : result.focus_score >= 45
+      : focusBand.key === 'building'
         ? 'Your focus has useful momentum and a few clear pressure points.'
         : 'Your focus needs support, not judgment.'
     : 'Add today\'s usage to build your cognitive snapshot.';
@@ -1569,35 +1578,35 @@ function renderOverview(snapshotOrPrediction) {
   elements.focusDetailScore.innerHTML = `${result.focus_score} <small>/ 100</small>`;
   elements.focusDetailLabel.textContent = hasData ? focusLabel : 'Not measured';
   elements.focusExplanation.textContent = hasData
-    ? 'Focus Potential estimates how well today\'s behavior supported sustained attention.'
+    ? `Focus Potential estimates how well today's behavior supported sustained attention. ${focusBand.label} is the current product guidance band; scores below 35 trigger a support signal.`
     : 'Add a snapshot to explain your focus potential.';
   elements.focusConfidence.textContent = `${confidence}%`;
   if (elements.focusComparison) elements.focusComparison.textContent = comparisonText('focus');
   renderContributorList(elements.focusContributors, hasData ? contributors.focus : []);
   elements.fatigueScore.textContent = result.fatigue_score;
   elements.fatigueLabel.textContent = hasData
-    ? supportiveScoreLabel('fatigue', result.fatigue_score)
+    ? fatigueBand.label
     : 'Not measured';
   elements.fatigueExplanation.textContent = hasData
-    ? 'Mental Fatigue estimates cognitive load from screen volume, timing, and recovery.'
+    ? `Mental Fatigue estimates load from screen volume, timing, and recovery. ${fatigueBand.label} is the current product guidance band; scores of 45 or more are worth watching.`
     : 'Add a snapshot to reveal fatigue contributors.';
   elements.fatigueConfidence.textContent = `${confidence}%`;
   if (elements.fatigueComparison) elements.fatigueComparison.textContent = comparisonText('fatigue');
   renderContributorList(elements.fatigueContributors, hasData ? contributors.fatigue : []);
   elements.distractionScore.textContent = result.distraction_score;
   elements.distractionLabel.textContent = hasData
-    ? supportiveScoreLabel('distraction', result.distraction_score)
+    ? distractionBand.label
     : 'Not measured';
   elements.distractionExplanation.textContent = hasData
-    ? 'Distraction Load estimates attention fragmentation from app mix and switching behavior.'
+    ? `Distraction Load estimates fragmentation from app mix and switching behavior. ${distractionBand.label} is the current product guidance band; scores of 45 or more are worth watching.`
     : 'Add a snapshot to reveal distraction contributors.';
   elements.distractionConfidence.textContent = `${confidence}%`;
   if (elements.distractionComparison) elements.distractionComparison.textContent = comparisonText('distraction');
   renderContributorList(elements.distractionContributors, hasData ? contributors.distraction : []);
-  elements.burnoutRisk.textContent = result.burnout_risk;
+  elements.burnoutRisk.textContent = hasData ? burnoutBand.label : 'Not measured';
   elements.burnoutScore.textContent = `${result.burnout_score} / 100`;
   elements.burnoutExplanation.textContent = hasData
-    ? 'Burnout Tendency combines behavioral load and recovery signals. It is not a diagnosis.'
+    ? `Recovery Pressure combines behavioral load and recovery signals. ${burnoutBand.label} is the current product guidance band; this is not a diagnosis.`
     : 'Add a snapshot to explain recovery pressure.';
   elements.burnoutConfidence.textContent = `${confidence}%`;
   if (elements.burnoutComparison) elements.burnoutComparison.textContent = comparisonText('burnout');
@@ -1613,11 +1622,13 @@ function renderOverview(snapshotOrPrediction) {
 
   const alert = result.alerts?.[0];
   elements.alertCard.classList.toggle('hidden', !alert);
+  elements.alertCard.dataset.severity = alert?.severity || '';
   if (alert) {
     elements.alertSeverity.textContent = alert.severity;
     elements.alertTitle.textContent = alert.title;
     elements.alertMessage.textContent = alert.message;
     elements.alertReason.textContent = alert.reason;
+    elements.alertAction.textContent = alert.action;
   }
 
   const recommendation = hasData
@@ -1628,6 +1639,14 @@ function renderOverview(snapshotOrPrediction) {
     : 'Create your first baseline';
   elements.recommendationText.textContent = recommendation
     || 'Enter today\'s app usage and optional behavior signals to get a focused intervention.';
+  elements.recommendationReason.textContent = hasData
+    ? result.primary_action?.reason || result.insights?.[0] || 'This is the strongest available signal.'
+    : 'Waiting for today\'s strongest signal.';
+  elements.recommendationReview.textContent = hasData
+    ? confidence >= 70
+      ? 'Log tomorrow\'s snapshot and compare it with your personal baseline.'
+      : 'Add optional context, rerun today, then compare again tomorrow.'
+    : 'Create today\'s baseline, then check the same signals tomorrow.';
 
   renderBaseline(result, hasData);
   renderForecast(result, context, hasData);
@@ -1653,9 +1672,9 @@ function upsertHistoryEntry(prediction, context) {
   refreshHistoryView();
 }
 
-function lastSevenDays() {
+function recentTrendDays() {
   reconcileCurrentSnapshot();
-  return Core.buildTrend(snapshots, localDateKey()).slots.map(slot => {
+  return Core.buildTrend(snapshots, localDateKey(), TREND_HISTORY_DAYS).slots.map(slot => {
     const date = new Date(`${slot.date}T12:00:00`);
     return {
       date: slot.date,
@@ -1669,48 +1688,119 @@ function lastSevenDays() {
 
 function renderTrends() {
   reconcileCurrentSnapshot();
-  const days = lastSevenDays();
+  const days = recentTrendDays();
   const available = days.filter(day => day.entry);
   const coverageLabel = `${available.length} recorded ${available.length === 1 ? 'day' : 'days'}`;
+  const averageFocus = available.length
+    ? Math.round(
+      available.reduce((sum, day) => sum + day.entry.focus_score, 0) / available.length,
+    )
+    : 0;
+  const todayKey = localDateKey();
+  let previousRecordedFocus = null;
 
-  elements.trendChart.innerHTML = days.map(day => {
+  const dayMarkup = days.map((day, index) => {
+    const date = new Date(`${day.date}T12:00:00`);
+    const fullDate = date.toLocaleDateString(APP_LOCALE, {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+    });
+    const isToday = day.date === todayKey;
+    const positionClass = index < 2
+      ? 'edge-start'
+      : index > days.length - 3
+        ? 'edge-end'
+        : '';
+    const dateMarkup = `
+      <span class="trend-day-label">${escapeHtml(day.label)}</span>
+      ${isToday ? '<span class="trend-today-label">Today</span>' : ''}
+    `;
+
     if (!day.entry) {
       return `
-        <div class="trend-day missing" title="${day.date}: no snapshot recorded">
+        <div
+          class="trend-day missing ${isToday ? 'today' : ''} ${positionClass}"
+          style="--day-index: ${index}"
+          tabindex="0"
+          role="img"
+          aria-label="${escapeHtml(fullDate)}: no snapshot recorded"
+        >
           <div class="trend-bars">
-            <div class="trend-placeholder" aria-label="No snapshot recorded"></div>
+            <div class="trend-placeholder" aria-hidden="true"><span>--</span></div>
           </div>
-          <span class="trend-day-label">${day.label}</span>
+          <div class="trend-date">${dateMarkup}</div>
+          <div class="trend-tooltip" role="tooltip" aria-hidden="true">
+            <strong>${escapeHtml(fullDate)}</strong>
+            <span>No snapshot recorded</span>
+            <small>Excluded from your personal average.</small>
+          </div>
         </div>
       `;
     }
 
-    const focus = day.entry.focus_score || 0;
-    const fatigue = day.entry.fatigue_score || 0;
+    const focus = Math.round(Number(day.entry.focus_score) || 0);
+    const fatigue = Math.round(Number(day.entry.fatigue_score) || 0);
+    const focusChange = previousRecordedFocus === null ? null : focus - previousRecordedFocus;
+    const comparison = focusChange === null
+      ? 'First recorded day in this view'
+      : focusChange === 0
+        ? 'No focus change from the previous record'
+        : `${focusChange > 0 ? '+' : ''}${focusChange} focus vs previous record`;
+    previousRecordedFocus = focus;
+
     return `
       <div
-        class="trend-day recorded"
+        class="trend-day recorded ${isToday ? 'today' : ''} ${positionClass}"
+        style="--day-index: ${index}"
         tabindex="0"
         role="img"
-        aria-label="${day.date}: focus ${focus} out of 100, fatigue ${fatigue} out of 100"
-        data-tooltip="Focus ${focus} · Fatigue ${fatigue}"
+        aria-label="${escapeHtml(fullDate)}: focus ${focus} out of 100, fatigue ${fatigue} out of 100. ${escapeHtml(comparison)}."
       >
         <div class="trend-bars">
-          <div class="trend-bar focus" style="--value: ${focus}"><span>${focus}</span></div>
-          <div class="trend-bar fatigue" style="--value: ${fatigue}"><span>${fatigue}</span></div>
+          <div class="trend-bar-track focus-track" aria-hidden="true">
+            <div class="trend-bar focus ${focus === 0 ? 'zero' : ''}" style="--value: ${focus}"><span>${focus}</span></div>
+          </div>
+          <div class="trend-bar-track fatigue-track" aria-hidden="true">
+            <div class="trend-bar fatigue ${fatigue === 0 ? 'zero' : ''}" style="--value: ${fatigue}"><span>${fatigue}</span></div>
+          </div>
         </div>
-        <span class="trend-day-label">${day.label}</span>
+        <div class="trend-date">${dateMarkup}</div>
+        <div class="trend-tooltip" role="tooltip" aria-hidden="true">
+          <strong>${escapeHtml(fullDate)}${isToday ? ' / Today' : ''}</strong>
+          <span><i class="tooltip-focus"></i>Focus <b>${focus}</b></span>
+          <span><i class="tooltip-fatigue"></i>Fatigue <b>${fatigue}</b></span>
+          <small>${escapeHtml(comparison)}</small>
+        </div>
       </div>
     `;
   }).join('');
+
+  const baselinePosition = 38 + (averageFocus * 1.5);
+  const baselineMarkup = available.length > 1
+    ? `
+      <div
+        class="trend-baseline"
+        style="--baseline-y: ${baselinePosition}px"
+        aria-hidden="true"
+      >
+        <span>Your average ${averageFocus}</span>
+      </div>
+    `
+    : '';
+  elements.trendChart.style.setProperty('--trend-days', days.length);
+  elements.trendChart.style.setProperty('--trend-width', `${days.length * 78}px`);
+  elements.trendChart.innerHTML = `${baselineMarkup}${dayMarkup}`;
   elements.trendChart.setAttribute(
     'aria-label',
-    `Seven-day focus score chart. ${coverageLabel}.`,
+    `${days.length}-day focus score chart. ${coverageLabel}. Scroll horizontally to view older days.`,
   );
   const showTrendOnboarding = available.length === 0;
   elements.trendEmptyState.classList.toggle('hidden', !showTrendOnboarding);
   elements.trendCoverageNote?.classList.toggle('hidden', available.length !== 1);
   elements.trendChart.classList.toggle('hidden', showTrendOnboarding);
+  elements.trendChartScroller?.classList.toggle('hidden', showTrendOnboarding);
+  elements.trendScrollHint?.classList.toggle('hidden', showTrendOnboarding);
   elements.trendChartLegend.classList.toggle('hidden', showTrendOnboarding);
   elements.averageFocusDetail.textContent = coverageLabel;
   elements.averageFatigueDetail.textContent = coverageLabel;
@@ -1721,15 +1811,12 @@ function renderTrends() {
     elements.bestDay.textContent = '--';
     elements.trendRisk.textContent = 'Low';
     elements.trendDirection.className = 'state-chip neutral';
-    elements.trendDirection.textContent = '0/7 days';
+    elements.trendDirection.textContent = '0 days';
     elements.trendNote.textContent =
       'Add snapshots on multiple days to uncover your personal focus and fatigue pattern.';
     return;
   }
 
-  const averageFocus = Math.round(
-    available.reduce((sum, day) => sum + day.entry.focus_score, 0) / available.length,
-  );
   const averageFatigue = Math.round(
     available.reduce((sum, day) => sum + day.entry.fatigue_score, 0) / available.length,
   );
@@ -1749,21 +1836,27 @@ function renderTrends() {
   elements.trendRisk.textContent = latest.burnout_risk;
   elements.trendDirection.className = `state-chip ${change < -5 ? 'danger' : change > 5 ? '' : 'neutral'}`;
   elements.trendDirection.textContent = available.length === 1
-    ? '1/7 days'
+    ? '1 recorded day'
     : change > 5
       ? `Up ${change}`
       : change < -5
         ? `Down ${Math.abs(change)}`
         : 'Stable';
   elements.trendNote.textContent = available.length === 1
-    ? 'Only one day is recorded. Generate one snapshot each day to build the seven-day trend.'
+    ? 'Only one day is recorded. Generate one snapshot each day to build your personal trend.'
     : available.length < 3
       ? 'A few more daily snapshots will make your personal baseline more reliable.'
     : change > 5
-      ? 'Focus is improving across the available week. Protect the routines behind your strongest day.'
+      ? 'Focus is improving across the recorded period. Protect the routines behind your strongest day.'
       : change < -5
-        ? 'Focus has softened across the available week. Check late-night use and app switching first.'
+        ? 'Focus has softened across the recorded period. Check late-night use and app switching first.'
         : 'Your focus has been relatively stable. Small changes in recovery may produce the next gain.';
+
+  requestAnimationFrame(() => {
+    if (elements.trendChartScroller) {
+      elements.trendChartScroller.scrollLeft = elements.trendChartScroller.scrollWidth;
+    }
+  });
 }
 
 function escapeHtml(value) {
@@ -2122,7 +2215,7 @@ async function recognizeScreenshot(file) {
       ? tesseractItems
       : nativeItems;
   } catch (error) {
-    if (Core.pairOcrUsageRows(nativeItems).length) return nativeItems;
+    if (nativeItems.length) return nativeItems;
     throw error;
   }
 }
@@ -2298,6 +2391,25 @@ async function processScreenshot(file) {
 
   try {
     const ocrItems = await recognizeScreenshot(file);
+    const screenshotType = Core.classifyUsageScreenshot(ocrItems);
+
+    if (screenshotType.kind === 'battery-percentages' || screenshotType.kind === 'percentage-only') {
+      const batteryScreenshot = screenshotType.kind === 'battery-percentages';
+      const message = batteryScreenshot
+        ? 'This is a battery-usage screen. Battery percentages do not show how long each app was used, so they cannot be converted into screen-time minutes. Open Digital Wellbeing > Dashboard, then upload a screenshot showing a duration for each app.'
+        : 'This screenshot shows percentages but no app usage durations. NeuroMentor cannot safely convert percentages into minutes. Upload a Screen Time or Digital Wellbeing screenshot that shows time for each app.';
+      extractionState = {
+        status: 'error',
+        confidence: 0,
+        reviewed: false,
+        items: [],
+        error: message,
+      };
+      renderExtractionReview();
+      setOcrStatus(message, 'warning');
+      return;
+    }
+
     const { matches } = parseDetectedUsage(ocrItems);
 
     if (!matches.length) {

@@ -44,6 +44,14 @@ class PrimaryAction(TypedDict):
     reason: str
 
 
+class ScoreBand(TypedDict, total=False):
+    key: str
+    label: str
+    tone: str
+    alert: bool
+    severity: str
+
+
 class ScoreResult(TypedDict):
     focus_score: int
     fatigue_score: int
@@ -123,6 +131,39 @@ def burnout_risk(score: int) -> str:
     if score >= 25:
         return "moderate"
     return "low"
+
+
+def score_band(metric: str, score: int) -> ScoreBand:
+    value = _round(_clamp(float(score)))
+    if metric == "focus":
+        if value >= 75:
+            return {"key": "strong", "label": "Strong support", "tone": "positive", "alert": False}
+        if value >= 55:
+            return {"key": "steady", "label": "Steady potential", "tone": "positive", "alert": False}
+        if value >= 35:
+            return {"key": "building", "label": "Building support", "tone": "warning", "alert": False}
+        return {
+            "key": "needs-attention",
+            "label": "Needs attention",
+            "tone": "danger",
+            "alert": True,
+            "severity": "high" if value < 25 else "medium",
+        }
+    if metric == "burnout":
+        if value >= 75:
+            return {"key": "high", "label": "High recovery pressure", "tone": "danger", "alert": True, "severity": "high"}
+        if value >= 50:
+            return {"key": "elevated", "label": "Elevated signal", "tone": "warning", "alert": True, "severity": "medium"}
+        if value >= 25:
+            return {"key": "moderate", "label": "Moderate signal", "tone": "neutral", "alert": False}
+        return {"key": "low", "label": "Low pressure", "tone": "positive", "alert": False}
+    if value >= 70:
+        return {"key": "high", "label": "High signal", "tone": "danger", "alert": True, "severity": "high"}
+    if value >= 45:
+        return {"key": "watch", "label": "Worth watching", "tone": "warning", "alert": True, "severity": "medium"}
+    if value >= 20:
+        return {"key": "moderate", "label": "Moderate signal", "tone": "neutral", "alert": False}
+    return {"key": "managed", "label": "Well managed", "tone": "positive", "alert": False}
 
 
 def primary_action(
