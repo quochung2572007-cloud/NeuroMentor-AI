@@ -88,6 +88,17 @@
         assert(new Set(responses.map(response => response.answer)).size === 4, 'answers repeated');
         assert(/cannot determine how you feel/i.test(responses[0].answer), 'feeling safety text missing');
       });
+      test('Mentor answers Vietnamese questions in Vietnamese', () => {
+        const snapshot = NeuroMentorCore.createDailySnapshot({ date: '2026-06-20', context });
+        const response = NeuroMentorCore.buildMentorResponse(
+          'Tôi nên làm gì?',
+          snapshot,
+          [snapshot],
+        );
+        assert(response.language === 'vi', `language was ${response.language}`);
+        assert(response.intent === 'action', `intent was ${response.intent}`);
+        assert(/Bước hữu ích nhất/.test(response.answer), 'Vietnamese response text missing');
+      });
 
       if (document.body.dataset.testStatus !== 'failed') {
         document.body.dataset.testStatus = 'passed';

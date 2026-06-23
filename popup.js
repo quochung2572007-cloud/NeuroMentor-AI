@@ -1804,10 +1804,13 @@ function addChatMessage(role, text, detail = '') {
 function buildLocalMentorResponse(question) {
   const response = Core.buildMentorResponse(question, currentSnapshot, snapshots);
   return {
+    language: response.language,
     answer: response.answer,
     evidence: [response.evidence],
     next_steps: [response.action],
-    disclaimer: 'Screen-time metadata cannot diagnose medical or mental-health conditions.',
+    disclaimer: response.language === 'vi'
+      ? 'Dữ liệu thời gian màn hình không thể chẩn đoán tình trạng y khoa hoặc sức khỏe tinh thần.'
+      : 'Screen-time metadata cannot diagnose medical or mental-health conditions.',
   };
 }
 
@@ -1834,7 +1837,8 @@ async function requestMentorResponse(question) {
       }),
     }, 2400);
     if (!response.ok) throw new Error(`API returned ${response.status}`);
-    return await response.json();
+    const result = await response.json();
+    return fallback.language === 'vi' && result.language !== 'vi' ? fallback : result;
   } catch {
     return fallback;
   }
@@ -1849,9 +1853,12 @@ async function handleMentorQuestion(question) {
   const response = await requestMentorResponse(cleaned);
   const evidence = (response.evidence || [])[0];
   const nextStep = (response.next_steps || [])[0];
+  const labels = response.language === 'vi'
+    ? { evidence: 'Dữ liệu', nextStep: 'Bước tiếp theo' }
+    : { evidence: 'Evidence', nextStep: 'Next step' };
   const detail = [
-    evidence ? `Evidence: ${evidence}` : '',
-    nextStep ? `Next step: ${nextStep}` : '',
+    evidence ? `${labels.evidence}: ${evidence}` : '',
+    nextStep ? `${labels.nextStep}: ${nextStep}` : '',
   ].filter(Boolean).join(' ');
   addChatMessage('mentor', response.answer, detail);
 

@@ -9,6 +9,7 @@ from app.schemas.usage import UsagePayload
 from app.services.intelligence_engine import (
     build_mentor_response,
     mentor_intent,
+    mentor_language,
     predict_cognitive_state,
 )
 from app.services.scoring import calculate_scores, normalize_usage, validate_context
@@ -117,6 +118,26 @@ class MentorTests(unittest.TestCase):
             build_mentor_response("Plan tomorrow", self.result)
         )
         self.assertTrue(response.next_steps)
+
+    def test_vietnamese_questions_use_vietnamese_intents_and_responses(self) -> None:
+        questions = {
+            "Tôi có thể cảm thấy thế nào?": "feel",
+            "Tôi nên làm gì?": "action",
+            "Tại sao điểm tập trung thay đổi?": "explain",
+            "Lập kế hoạch ngày mai": "plan",
+        }
+        for question, expected_intent in questions.items():
+            with self.subTest(question=question):
+                self.assertEqual(mentor_language(question), "vi")
+                self.assertEqual(mentor_intent(question), expected_intent)
+                response = build_mentor_response(question, self.result)
+                self.assertEqual(response["language"], "vi")
+                self.assertNotIn("Screen-time metadata", response["answer"])
+
+    def test_unaccented_vietnamese_is_detected(self) -> None:
+        response = build_mentor_response("Toi nen lam gi ngay mai?", self.result)
+        self.assertEqual(response["language"], "vi")
+        self.assertIn("Kế hoạch", response["answer"])
 
 
 if __name__ == "__main__":

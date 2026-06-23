@@ -110,3 +110,20 @@ test('Mentor intents produce distinct, safe deterministic responses', () => {
     assert.doesNotMatch(response.answer, /you have (adhd|depression|burnout)/i);
   });
 });
+
+test('Mentor detects Vietnamese and answers in Vietnamese', () => {
+  const snapshot = Core.createDailySnapshot({ date: '2026-06-20', context: fixtures[0].context });
+  const questions = [
+    ['Tôi có thể cảm thấy thế nào?', 'feel'],
+    ['Tôi nên làm gì?', 'action'],
+    ['Tại sao điểm tập trung thay đổi?', 'explain'],
+    ['Lập kế hoạch ngày mai', 'plan'],
+  ];
+  questions.forEach(([question, intent]) => {
+    const response = Core.buildMentorResponse(question, snapshot, [snapshot]);
+    assert.strictEqual(response.language, 'vi');
+    assert.strictEqual(response.intent, intent);
+    assert.doesNotMatch(response.answer, /Screen-time metadata/i);
+  });
+  assert.strictEqual(Core.detectMentorLanguage('Toi nen lam gi?'), 'vi');
+});

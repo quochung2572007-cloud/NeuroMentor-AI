@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import asdict, dataclass
 
 from app.services.scoring import (
@@ -9,6 +10,15 @@ from app.services.scoring import (
     PrimaryAction,
     calculate_scores,
 )
+
+VI_CATEGORY_LABELS = {
+    "social": "Mạng xã hội",
+    "productivity": "Công việc",
+    "games": "Trò chơi",
+    "learning": "Học tập",
+    "health": "Sức khỏe",
+    "entertainment": "Giải trí",
+}
 
 
 @dataclass
@@ -103,23 +113,41 @@ def predict_cognitive_state(
     )
 
 
+def _normalize_mentor_text(question: str) -> str:
+    normalized = unicodedata.normalize("NFD", question).lower()
+    return "".join(character for character in normalized if not unicodedata.combining(character)).replace("đ", "d").strip()
+
+
+def mentor_language(question: str) -> str:
+    source = question.lower()
+    normalized = _normalize_mentor_text(question)
+    vietnamese_characters = "ăâđêôơưàáạảãèéẹẻẽìíịỉĩòóọỏõùúụủũỳýỵỷỹ"
+    vietnamese_phrases = (
+        "toi nen", "lam gi", "tai sao", "vi sao", "ngay mai", "cam thay",
+        "tap trung", "met moi", "xao nhang", "kiet suc", "xu huong", "giup toi",
+    )
+    return "vi" if any(character in source for character in vietnamese_characters) or any(
+        phrase in normalized for phrase in vietnamese_phrases
+    ) else "en"
+
+
 def mentor_intent(question: str) -> str:
-    normalized = question.strip().lower()
+    normalized = _normalize_mentor_text(question)
 
     def contains(*terms: str) -> bool:
         return any(term in normalized for term in terms)
 
-    if contains("plan tomorrow", "tomorrow plan", "plan my day", "tomorrow"):
+    if contains("plan tomorrow", "tomorrow plan", "plan my day", "tomorrow", "ke hoach ngay mai", "ngay mai"):
         return "plan"
-    if contains("why", "change", "cause", "reason", "contributor"):
+    if contains("why", "change", "cause", "reason", "contributor", "tai sao", "vi sao", "thay doi", "nguyen nhan"):
         return "explain"
-    if contains("how might i feel", "how will i feel", "how i feel", "feel today", "emotion"):
+    if contains("how might i feel", "how will i feel", "how i feel", "feel today", "emotion", "cam thay", "tam trang"):
         return "feel"
-    if contains("what should i do", "what can i do", "next step", "recommend", "help me"):
+    if contains("what should i do", "what can i do", "next step", "recommend", "help me", "toi nen lam gi", "nen lam gi", "loi khuyen", "giup toi"):
         return "action"
-    if contains("trend", "week", "history", "improving", "baseline"):
+    if contains("trend", "week", "history", "improving", "baseline", "xu huong", "tuan", "lich su"):
         return "trend"
-    if contains("score", "focus", "fatigue", "distraction", "burnout"):
+    if contains("score", "focus", "fatigue", "distraction", "burnout", "diem", "tap trung", "met moi", "xao nhang", "kiet suc"):
         return "metric"
     return "general"
 
@@ -142,18 +170,97 @@ def _history_sentence(result: CognitiveResult, recent_history: list[dict]) -> st
     return f"Your focus estimate is {abs(change)} points {direction} than the previous saved day."
 
 
+def _history_sentence_vi(result: CognitiveResult, recent_history: list[dict]) -> str:
+    previous = next(
+        (entry for entry in reversed(recent_history) if isinstance(entry.get("focus_score"), (int, float))),
+        None,
+    )
+    if previous is None:
+        return "Cần thêm ảnh chụp hằng ngày trước khi có thể mô tả xu hướng cá nhân."
+    change = result.focus_score - int(previous["focus_score"])
+    if change == 0:
+        return "Ước tính tập trung không đổi so với ngày đã lưu trước đó."
+    direction = "cao hơn" if change > 0 else "thấp hơn"
+    return f"Ước tính tập trung {direction} {abs(change)} điểm so với ngày đã lưu trước đó."
+
+
+def _vietnamese_action(result: CognitiveResult) -> str:
+    actions = {
+        "late-night": "Chuyển 30 phút sử dụng màn hình ban đêm sang sớm hơn và đặt giờ dừng rõ ràng.",
+        "deep-work": "Dành 25 phút cho việc học hoặc công việc ưu tiên trước khi mở ứng dụng giải trí.",
+        "social": "Chọn một khung giờ dùng mạng xã hội và không mở ứng dụng trong 20 phút đầu ngày.",
+        "games": "Hoàn thành một việc ưu tiên trong 20 phút trước phiên chơi tiếp theo.",
+        "entertainment": "Hoàn thành một việc ưu tiên trong 20 phút trước phiên giải trí tiếp theo.",
+        "switching": "Bật chế độ tập trung trong 25 phút và chỉ mở ứng dụng cần thiết.",
+        "productive-ratio": "Dùng 20 phút đầu ngày mai cho công việc, lập kế hoạch hoặc học tập.",
+        "maintain": "Lặp lại khung tập trung hiệu quả nhất vào cùng thời điểm ngày mai.",
+    }
+    return actions.get(result.primary_action["key"], "Chọn một thay đổi nhỏ và có thể lặp lại vào ngày mai.")
+
+
 def build_mentor_response(
     question: str,
     result: CognitiveResult,
     recent_history: list[dict] | None = None,
 ) -> dict[str, str | list[str]]:
     history = recent_history or []
+    language = mentor_language(question)
     intent = mentor_intent(question)
     action = result.primary_action["action"]
     reason = result.primary_action["reason"]
     category = CATEGORY_LABELS.get(result.top_category, "No category")
     category_share = result.usage.get(result.top_category, 0) / max(result.total_minutes, 1)
     trend = _history_sentence(result, history)
+
+    if language == "vi":
+        category_vi = VI_CATEGORY_LABELS.get(result.top_category, "Danh mục chính")
+        evidence_vi = f"{category_vi} chiếm {category_share:.0%} thời gian màn hình đã ghi nhận."
+        action_vi = _vietnamese_action(result)
+        trend_vi = _history_sentence_vi(result, history)
+        if result.total_minutes == 0:
+            answer = (
+                "Mình chưa có ảnh chụp dữ liệu hợp lệ để trả lời dựa trên thông tin của bạn. "
+                "Hãy kiểm tra và lưu tổng thời gian hôm nay trước."
+            )
+        elif intent == "feel":
+            answer = (
+                "Dữ liệu thời gian màn hình không thể xác định chính xác cảm xúc của bạn. "
+                f"Dữ liệu chỉ cho thấy {category_vi} chiếm {category_share:.0%} thời gian sử dụng "
+                f"và ước tính tập trung là {result.focus_score}/100. Hãy tự kiểm tra xem lúc này "
+                "bạn đang tràn đầy năng lượng, bình thường, phân tán hay mệt mỏi."
+            )
+        elif intent == "action":
+            answer = f"Bước hữu ích nhất lúc này là: {action_vi} Đây là một thay đổi nhỏ, cụ thể và dễ lặp lại."
+        elif intent == "explain":
+            answer = (
+                f"Ước tính tập trung hiện tại là {result.focus_score}/100. {evidence_vi} {trend_vi} "
+                "Đây chỉ là mối liên hệ trong dữ liệu sử dụng, không phải bằng chứng về cảm xúc "
+                "hay tình trạng y khoa."
+            )
+        elif intent == "plan":
+            answer = f"Kế hoạch cho ngày mai: {action_vi} Sau đó hãy nghỉ ngắn và chỉ thêm một phiên tập trung nữa nếu phù hợp."
+        elif intent == "trend":
+            answer = trend_vi
+        elif intent == "metric":
+            answer = (
+                f"Ước tính tập trung mới nhất là {result.focus_score}/100 với độ tin cậy "
+                f"{round(result.confidence * 100)}%. {evidence_vi} {trend_vi}"
+            )
+        else:
+            answer = (
+                "Mình có thể giải thích điểm số hôm nay, yếu tố ảnh hưởng mạnh nhất hoặc lập một "
+                f"kế hoạch nhỏ cho ngày mai. {evidence_vi}"
+            )
+        return {
+            "language": "vi",
+            "answer": answer,
+            "evidence": [evidence_vi],
+            "next_steps": [action_vi],
+            "disclaimer": (
+                "Dữ liệu thời gian màn hình không thể chẩn đoán cảm xúc, kiệt sức, ADHD, "
+                "trầm cảm hoặc tình trạng y khoa hay sức khỏe tinh thần khác."
+            ),
+        }
 
     if result.total_minutes == 0:
         answer = (
@@ -194,6 +301,7 @@ def build_mentor_response(
         )
 
     return {
+        "language": "en",
         "answer": answer,
         "evidence": result.insights[:2],
         "next_steps": [action],

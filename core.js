@@ -27,6 +27,14 @@
     health: "Health",
     entertainment: "Entertainment",
   });
+  const CATEGORY_LABELS_VI = Object.freeze({
+    social: "Mạng xã hội",
+    productivity: "Công việc",
+    games: "Trò chơi",
+    learning: "Học tập",
+    health: "Sức khỏe",
+    entertainment: "Giải trí",
+  });
 
   function clamp(value, minimum, maximum) {
     return Math.min(maximum, Math.max(minimum, value));
@@ -659,20 +667,41 @@
     };
   }
 
+  function normalizeMentorText(question = "") {
+    return String(question)
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/đ/g, "d")
+      .replace(/Đ/g, "D")
+      .trim()
+      .toLowerCase();
+  }
+
+  function detectMentorLanguage(question = "") {
+    const source = String(question).toLowerCase();
+    const normalized = normalizeMentorText(source);
+    const hasVietnameseCharacter = /[ăâđêôơưàáạảãèéẹẻẽìíịỉĩòóọỏõùúụủũỳýỵỷỹ]/i.test(source);
+    const hasVietnamesePhrase = [
+      "toi nen", "lam gi", "tai sao", "vi sao", "ngay mai", "cam thay", "tap trung",
+      "met moi", "xao nhang", "kiet suc", "xu huong", "man hinh", "giup toi",
+    ].some((phrase) => normalized.includes(phrase));
+    return hasVietnameseCharacter || hasVietnamesePhrase ? "vi" : "en";
+  }
+
   function detectMentorIntent(question = "") {
-    const normalized = String(question).trim().toLowerCase();
+    const normalized = normalizeMentorText(question);
     const matches = (terms) => terms.some((term) => normalized.includes(term));
 
-    if (matches(["plan tomorrow", "tomorrow plan", "plan my day", "tomorrow"])) return "plan";
-    if (matches(["why", "change", "cause", "reason", "contributor"])) return "explain";
-    if (matches(["how might i feel", "how will i feel", "how i feel", "feel today", "emotion"])) {
+    if (matches(["plan tomorrow", "tomorrow plan", "plan my day", "tomorrow", "ke hoach ngay mai", "ngay mai"])) return "plan";
+    if (matches(["why", "change", "cause", "reason", "contributor", "tai sao", "vi sao", "thay doi", "nguyen nhan"])) return "explain";
+    if (matches(["how might i feel", "how will i feel", "how i feel", "feel today", "emotion", "cam thay", "tam trang"])) {
       return "feel";
     }
-    if (matches(["what should i do", "what can i do", "next step", "recommend", "help me"])) {
+    if (matches(["what should i do", "what can i do", "next step", "recommend", "help me", "toi nen lam gi", "nen lam gi", "loi khuyen", "giup toi"])) {
       return "action";
     }
-    if (matches(["trend", "week", "history", "improving", "baseline"])) return "trend";
-    if (matches(["score", "focus", "fatigue", "distraction", "burnout"])) return "metric";
+    if (matches(["trend", "week", "history", "improving", "baseline", "xu huong", "tuan", "lich su"])) return "trend";
+    if (matches(["score", "focus", "fatigue", "distraction", "burnout", "diem", "tap trung", "met moi", "xao nhang", "kiet suc"])) return "metric";
     return "general";
   }
 
@@ -686,17 +715,44 @@
     return `Your focus estimate is ${Math.abs(comparison.change)} points ${direction} than the previous saved day.`;
   }
 
+  function vietnameseHistorySentence(snapshot, snapshots) {
+    const comparison = metricComparison("focus", snapshot, snapshots);
+    if (comparison.change === null) {
+      return "Cần thêm ảnh chụp hằng ngày trước khi có thể mô tả xu hướng cá nhân.";
+    }
+    if (comparison.change === 0) return "Ước tính tập trung không đổi so với ngày đã lưu trước đó.";
+    const direction = comparison.change > 0 ? "cao hơn" : "thấp hơn";
+    return `Ước tính tập trung ${direction} ${Math.abs(comparison.change)} điểm so với ngày đã lưu trước đó.`;
+  }
+
+  function vietnameseAction(primaryAction) {
+    const actions = {
+      "late-night": "Chuyển 30 phút sử dụng màn hình ban đêm sang sớm hơn và đặt giờ dừng rõ ràng.",
+      "deep-work": "Dành 25 phút cho việc học hoặc công việc ưu tiên trước khi mở ứng dụng giải trí.",
+      social: "Chọn một khung giờ dùng mạng xã hội và không mở ứng dụng trong 20 phút đầu ngày.",
+      games: "Hoàn thành một việc ưu tiên trong 20 phút trước phiên chơi tiếp theo.",
+      entertainment: "Hoàn thành một việc ưu tiên trong 20 phút trước phiên giải trí tiếp theo.",
+      switching: "Bật chế độ tập trung trong 25 phút và chỉ mở ứng dụng cần thiết.",
+      "productive-ratio": "Dùng 20 phút đầu ngày mai cho công việc, lập kế hoạch hoặc học tập.",
+      maintain: "Lặp lại khung tập trung hiệu quả nhất vào cùng thời điểm ngày mai.",
+    };
+    return actions[primaryAction.key] || "Chọn một thay đổi nhỏ và có thể lặp lại vào ngày mai.";
+  }
+
   function buildMentorResponse(question, latestSnapshot, snapshots = []) {
+    const language = detectMentorLanguage(question);
     const intent = detectMentorIntent(question);
     const snapshot = latestSnapshot ? normalizeSnapshot(latestSnapshot, latestSnapshot.date) : null;
 
     if (!snapshot || !snapshot.validation.valid) {
       return {
+        language,
         intent,
-        answer:
-          "I do not have a complete saved snapshot to reason from yet. Review today's category totals, save them, and I can explain the strongest pattern without guessing.",
-        evidence: "No valid daily snapshot is available.",
-        action: "Review and save today's usage.",
+        answer: language === "vi"
+          ? "Mình chưa có ảnh chụp dữ liệu hợp lệ để trả lời dựa trên thông tin của bạn. Hãy kiểm tra và lưu tổng thời gian hôm nay trước."
+          : "I do not have a complete saved snapshot to reason from yet. Review today's category totals, save them, and I can explain the strongest pattern without guessing.",
+        evidence: language === "vi" ? "Chưa có ảnh chụp dữ liệu hằng ngày hợp lệ." : "No valid daily snapshot is available.",
+        action: language === "vi" ? "Kiểm tra và lưu dữ liệu sử dụng hôm nay." : "Review and save today's usage.",
       };
     }
 
@@ -707,6 +763,31 @@
     const dominantLabel = CATEGORY_LABELS[result.dominant_category];
     const dominantPercent = Math.round(result.dominant_ratio * 100);
     let answer;
+
+    if (language === "vi") {
+      const dominantLabelVi = CATEGORY_LABELS_VI[result.dominant_category];
+      const evidenceVi = `${dominantLabelVi} chiếm ${dominantPercent}% thời gian màn hình đã ghi nhận.`;
+      const actionVi = vietnameseAction(result.primary_action);
+      if (intent === "feel") {
+        answer = `Dữ liệu thời gian màn hình không thể xác định chính xác cảm xúc của bạn. Dữ liệu chỉ cho thấy ${dominantLabelVi} chiếm ${dominantPercent}% thời gian sử dụng và ước tính tập trung là ${result.focus_score}/100. Hãy tự kiểm tra xem lúc này bạn đang tràn đầy năng lượng, bình thường, phân tán hay mệt mỏi.`;
+      } else if (intent === "action") {
+        answer = `Bước hữu ích nhất lúc này là: ${actionVi} Đây là một thay đổi nhỏ, cụ thể và dễ lặp lại.`;
+      } else if (intent === "explain") {
+        answer = `Ước tính tập trung hiện tại là ${result.focus_score}/100. ${evidenceVi} ${vietnameseHistorySentence(snapshot, snapshots)} Đây chỉ là mối liên hệ trong dữ liệu sử dụng, không phải bằng chứng về cảm xúc hay tình trạng y khoa.`;
+      } else if (intent === "plan") {
+        answer = `Kế hoạch cho ngày mai: ${actionVi} Sau đó hãy nghỉ ngắn và chỉ thêm một phiên tập trung nữa nếu phù hợp.`;
+      } else if (intent === "trend") {
+        const trend = buildTrend(snapshots, snapshot.date);
+        answer = trend.available_days < 2
+          ? "Chưa có đủ lịch sử để xác định xu hướng đáng tin cậy. Hãy thêm ít nhất một ảnh chụp hằng ngày nữa."
+          : `${vietnameseHistorySentence(snapshot, snapshots)} Hiện có ${trend.available_days} ngày đã lưu, với mức tập trung trung bình ${trend.average_focus}/100.`;
+      } else if (intent === "metric") {
+        answer = `Ước tính tập trung mới nhất là ${result.focus_score}/100 với độ tin cậy ${result.confidence}%. ${evidenceVi} ${vietnameseHistorySentence(snapshot, snapshots)}`;
+      } else {
+        answer = `Mình có thể giải thích điểm số hôm nay, yếu tố ảnh hưởng mạnh nhất hoặc lập một kế hoạch nhỏ cho ngày mai. ${evidenceVi}`;
+      }
+      return { language, intent, answer, evidence: evidenceVi, action: actionVi };
+    }
 
     if (intent === "feel") {
       answer =
@@ -742,7 +823,7 @@
         `For the latest snapshot, ${evidence.toLowerCase()}`;
     }
 
-    return { intent, answer, evidence, action };
+    return { language, intent, answer, evidence, action };
   }
 
   return Object.freeze({
@@ -764,6 +845,7 @@
     previousSnapshot,
     metricComparison,
     buildTrend,
+    detectMentorLanguage,
     detectMentorIntent,
     buildMentorResponse,
   });

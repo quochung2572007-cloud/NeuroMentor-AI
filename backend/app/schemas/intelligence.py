@@ -68,6 +68,7 @@ class MentorRequest(BaseModel):
 
 
 class MentorResponse(BaseModel):
+    language: str
     answer: str
     evidence: list[str]
     next_steps: list[str]
