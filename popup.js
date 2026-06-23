@@ -25,6 +25,16 @@ const STORAGE_KEYS = {
   phoneNumber: 'neuroMentorPhoneNumber',
   theme: 'neuroMentorTheme',
 };
+const WORKSPACE_STORAGE_KEYS = [
+  STORAGE_KEYS.snapshots,
+  STORAGE_KEYS.context,
+  STORAGE_KEYS.prediction,
+  STORAGE_KEYS.snapshotDate,
+  STORAGE_KEYS.history,
+  STORAGE_KEYS.chat,
+  STORAGE_KEYS.workspaceOwner,
+];
+const SESSION_WORKSPACE_KEYS = new Set(WORKSPACE_STORAGE_KEYS);
 const DEFAULT_REMINDER = {
   enabled: false,
   time: '20:00',
@@ -320,6 +330,7 @@ function applyExternalSnapshots(value) {
 
 function bindSnapshotStorageSync() {
   window.addEventListener('storage', event => {
+    if (appMode === 'offline') return;
     if (event.key !== STORAGE_KEYS.snapshots || event.newValue === null) return;
     try {
       applyExternalSnapshots(JSON.parse(event.newValue));
@@ -329,6 +340,7 @@ function bindSnapshotStorageSync() {
   });
 
   globalThis.chrome?.storage?.onChanged?.addListener((changes, areaName) => {
+    if (appMode === 'offline') return;
     if (areaName !== 'local' || !changes[STORAGE_KEYS.snapshots]) return;
     applyExternalSnapshots(changes[STORAGE_KEYS.snapshots].newValue);
   });
@@ -479,7 +491,7 @@ function scoreLabel(score, inverted = false) {
   return 'Needs attention';
 }
 
-function storageGet(keys) {
+function persistentStorageGet(keys) {
   if (globalThis.chrome?.storage?.local) {
     return new Promise(resolve => chrome.storage.local.get(keys, resolve));
   }
@@ -492,7 +504,7 @@ function storageGet(keys) {
   return Promise.resolve(result);
 }
 
-function storageSet(values) {
+function persistentStorageSet(values) {
   if (globalThis.chrome?.storage?.local) {
     return new Promise(resolve => chrome.storage.local.set(values, resolve));
   }
@@ -503,13 +515,68 @@ function storageSet(values) {
   return Promise.resolve();
 }
 
-function storageRemove(keys) {
+function persistentStorageRemove(keys) {
   if (globalThis.chrome?.storage?.local) {
     return new Promise(resolve => chrome.storage.local.remove(keys, resolve));
   }
 
   keys.forEach(key => localStorage.removeItem(key));
   return Promise.resolve();
+}
+
+function sessionDataGet(keys) {
+  const result = {};
+  keys.forEach(key => {
+    const value = sessionStorage.getItem(key);
+    result[key] = value ? JSON.parse(value) : undefined;
+  });
+  return Promise.resolve(result);
+}
+
+function sessionDataSet(values) {
+  Object.entries(values).forEach(([key, value]) => {
+    sessionStorage.setItem(key, JSON.stringify(value));
+  });
+  return Promise.resolve();
+}
+
+function sessionDataRemove(keys) {
+  keys.forEach(key => sessionStorage.removeItem(key));
+  return Promise.resolve();
+}
+
+async function storageGet(keys) {
+  if (appMode !== 'offline') return persistentStorageGet(keys);
+  const sessionKeys = keys.filter(key => SESSION_WORKSPACE_KEYS.has(key));
+  const persistentKeys = keys.filter(key => !SESSION_WORKSPACE_KEYS.has(key));
+  const [persistentValues, sessionValues] = await Promise.all([
+    persistentStorageGet(persistentKeys),
+    sessionDataGet(sessionKeys),
+  ]);
+  return { ...persistentValues, ...sessionValues };
+}
+
+async function storageSet(values) {
+  const entries = Object.entries(values);
+  const sessionValues = Object.fromEntries(
+    entries.filter(([key]) => appMode === 'offline' && SESSION_WORKSPACE_KEYS.has(key)),
+  );
+  const persistentValues = Object.fromEntries(
+    entries.filter(([key]) => appMode !== 'offline' || !SESSION_WORKSPACE_KEYS.has(key)),
+  );
+  await Promise.all([
+    Object.keys(persistentValues).length ? persistentStorageSet(persistentValues) : Promise.resolve(),
+    Object.keys(sessionValues).length ? sessionDataSet(sessionValues) : Promise.resolve(),
+  ]);
+}
+
+async function storageRemove(keys) {
+  const sessionKeys = keys.filter(key => appMode === 'offline' && SESSION_WORKSPACE_KEYS.has(key));
+  const persistentKeys = keys.filter(key => appMode !== 'offline' || !SESSION_WORKSPACE_KEYS.has(key));
+  await Promise.all([
+    persistentKeys.length ? persistentStorageRemove(persistentKeys) : Promise.resolve(),
+    sessionKeys.length ? sessionDataRemove(sessionKeys) : Promise.resolve(),
+  ]);
 }
 
 function latestHistoryDate(entries) {
@@ -872,9 +939,9 @@ function renderAccount() {
     elements.accountAction.dataset.action = 'logout';
   } else {
     elements.accountEmail.textContent = 'Offline workspace';
-    elements.accountMemberSince.textContent = 'Stored only on this device';
-    elements.accountSyncTitle.textContent = 'Local mode';
-    elements.accountSyncStatus.textContent = 'Your analysis remains in this browser.';
+    elements.accountMemberSince.textContent = 'Temporary session';
+    elements.accountSyncTitle.textContent = 'Temporary offline session';
+    elements.accountSyncStatus.textContent = 'Your analysis resets when this tab is closed.';
     elements.accountAction.textContent = 'Log in or create account';
     elements.accountAction.dataset.action = 'login';
   }
@@ -1027,15 +1094,20 @@ async function claimWorkspace(owner) {
 }
 
 async function startAccountSession(token, user) {
-  await claimWorkspace(user.id);
+  const previousMode = appMode;
   authToken = token;
   currentUser = user;
   appMode = 'account';
+  await claimWorkspace(user.id);
   await storageSet({
     [STORAGE_KEYS.authToken]: token,
     [STORAGE_KEYS.authUser]: user,
     [STORAGE_KEYS.appMode]: 'account',
   });
+  if (previousMode === 'offline') {
+    const accountWorkspace = await persistentStorageGet(WORKSPACE_STORAGE_KEYS);
+    await restoreWorkspaceState(accountWorkspace);
+  }
   showWorkspace();
   setEngineStatus('cloud');
   await loadReminderSettings();
@@ -1090,12 +1162,14 @@ async function handleAuthentication(mode) {
 }
 
 async function continueOffline() {
-  await claimWorkspace('offline');
   authToken = null;
   currentUser = null;
   accountDeviceId = null;
   appMode = 'offline';
+  await sessionDataRemove(WORKSPACE_STORAGE_KEYS);
+  await resetWorkspaceData();
   await storageSet({ [STORAGE_KEYS.appMode]: 'offline' });
+  await storageSet({ [STORAGE_KEYS.workspaceOwner]: 'offline' });
   await storageRemove([
     STORAGE_KEYS.authToken,
     STORAGE_KEYS.authUser,
@@ -2496,10 +2570,10 @@ async function handleAnalysisSubmit(event) {
     renderOverview(currentSnapshot);
     renderTrends();
     void syncUsageToAccount(currentContext.usage);
-    elements.analysisStatus.textContent = currentPrediction.source === 'cloud'
-      ? 'Snapshot saved successfully and analyzed with the API.'
-      : currentPrediction.source === 'offline'
-        ? 'Snapshot saved locally while offline.'
+    elements.analysisStatus.textContent = appMode === 'offline'
+      ? 'Snapshot saved for this tab. Closing the tab resets offline data.'
+      : currentPrediction.source === 'cloud'
+        ? 'Snapshot saved successfully and analyzed with the API.'
         : 'Snapshot saved locally. The analysis API is not configured or unavailable.';
     elements.analysisStatus.className = `form-status ${currentPrediction.source === 'cloud' ? 'success' : 'warning'}`;
     switchScreen('overview');
@@ -2618,22 +2692,7 @@ function bindEvents() {
   });
 }
 
-async function initialize() {
-  bindEvents();
-  bindSnapshotStorageSync();
-  setAuthMode('login');
-  const stored = await storageGet(Object.values(STORAGE_KEYS));
-
-  themePreference = stored[STORAGE_KEYS.theme] === 'dark' ? 'dark' : 'light';
-  applyTheme(themePreference);
-  localUserId = stored[STORAGE_KEYS.localUserId] || createLocalUserId();
-  if (!stored[STORAGE_KEYS.localUserId]) {
-    await storageSet({ [STORAGE_KEYS.localUserId]: localUserId });
-  }
-  phoneNumber = typeof stored[STORAGE_KEYS.phoneNumber] === 'string'
-    ? stored[STORAGE_KEYS.phoneNumber]
-    : '';
-
+async function restoreWorkspaceState(stored) {
   const today = localDateKey();
   const legacyHistory = Array.isArray(stored[STORAGE_KEYS.history]) ? stored[STORAGE_KEYS.history] : [];
   const storedSnapshots = Array.isArray(stored[STORAGE_KEYS.snapshots])
@@ -2656,15 +2715,10 @@ async function initialize() {
   workspaceDate = today;
   activateSnapshot(todaySnapshot || Core.createDailySnapshot({ date: today }));
   chatHistory = Array.isArray(stored[STORAGE_KEYS.chat]) ? stored[STORAGE_KEYS.chat] : [];
-  accountDeviceId = stored[STORAGE_KEYS.devicePlatform] === clientPlatform()
-    ? stored[STORAGE_KEYS.deviceId] || null
-    : null;
 
   populateContext(currentContext);
   renderOverview(currentSnapshot);
   renderTrends();
-  setupReminderTimeOptions();
-  renderReminderSettings();
   if (!Array.isArray(stored[STORAGE_KEYS.snapshots])) {
     await persistSnapshots();
   }
@@ -2678,11 +2732,43 @@ async function initialize() {
     showNewDayStatus();
   }
 
+  elements.chatLog.querySelectorAll('.chat-message:not(:first-child)').forEach(message => message.remove());
   chatHistory.slice(-8).forEach(message => {
     addChatMessage(message.role, message.text, message.detail || '');
   });
+}
 
-  const storedToken = stored[STORAGE_KEYS.authToken];
+async function initialize() {
+  bindEvents();
+  bindSnapshotStorageSync();
+  setAuthMode('login');
+
+  const persistentStored = await persistentStorageGet(Object.values(STORAGE_KEYS));
+  const storedToken = persistentStored[STORAGE_KEYS.authToken];
+  const restoringOffline = !storedToken && persistentStored[STORAGE_KEYS.appMode] === 'offline';
+  appMode = restoringOffline ? 'offline' : 'signed-out';
+  const offlineWorkspace = restoringOffline
+    ? await sessionDataGet(WORKSPACE_STORAGE_KEYS)
+    : {};
+  const stored = { ...persistentStored, ...offlineWorkspace };
+
+  themePreference = stored[STORAGE_KEYS.theme] === 'dark' ? 'dark' : 'light';
+  applyTheme(themePreference);
+  localUserId = stored[STORAGE_KEYS.localUserId] || createLocalUserId();
+  if (!stored[STORAGE_KEYS.localUserId]) {
+    await storageSet({ [STORAGE_KEYS.localUserId]: localUserId });
+  }
+  phoneNumber = typeof stored[STORAGE_KEYS.phoneNumber] === 'string'
+    ? stored[STORAGE_KEYS.phoneNumber]
+    : '';
+
+  await restoreWorkspaceState(stored);
+  accountDeviceId = stored[STORAGE_KEYS.devicePlatform] === clientPlatform()
+    ? stored[STORAGE_KEYS.deviceId] || null
+    : null;
+  setupReminderTimeOptions();
+  renderReminderSettings();
+
   if (storedToken) {
     setAuthStatus('Restoring your account...');
     const restored = await restoreAccountSession(storedToken, stored[STORAGE_KEYS.authUser]);
