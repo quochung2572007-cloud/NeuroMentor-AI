@@ -86,6 +86,178 @@
     return CATEGORIES.reduce((total, category) => total + normalized[category], 0);
   }
 
+  function normalizeSearchText(value = "") {
+    return String(value)
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[đĐ]/g, "d")
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function parseScreenDuration(value = "") {
+    const normalized = normalizeSearchText(value).replace(/[’′]/g, "'");
+    const hourUnit = "(?:h|hr|hrs|hour|hours|g|gio|tieng)";
+    const minuteUnit = "(?:m|min|mins|minute|minutes|p|ph|phut|')";
+    const hoursAndMinutes = normalized.match(
+      new RegExp(`(\\d{1,2})\\s*${hourUnit}\\s*(\\d{1,2})\\s*${minuteUnit}`),
+    );
+    if (hoursAndMinutes) {
+      return Number(hoursAndMinutes[1]) * 60 + Number(hoursAndMinutes[2]);
+    }
+    const compactHoursAndMinutes = normalized.match(
+      new RegExp(`(\\d{1,2})\\s*${hourUnit}\\s*(\\d{1,2})(?!\\s*%)`),
+    );
+    if (compactHoursAndMinutes) {
+      return Number(compactHoursAndMinutes[1]) * 60 + Number(compactHoursAndMinutes[2]);
+    }
+    const hours = normalized.match(new RegExp(`(\\d{1,2})\\s*${hourUnit}`));
+    if (hours) return Number(hours[1]) * 60;
+    const minutes = normalized.match(new RegExp(`(\\d{1,3})\\s*${minuteUnit}`));
+    return minutes ? Number(minutes[1]) : null;
+  }
+
+  function extractAppNameCandidate(value = "") {
+    const source = String(value).replace(/\s+/g, " ").trim();
+    if (!source || source.length < 3 || source.length > 52 || source.includes(":")) return null;
+    if (
+      parseScreenDuration(source) !== null &&
+      /^[=_•·\-–—>\s]*\d{1,3}\s*(?:h|hr|hrs|hour|hours|g|giờ|gio|tiếng|tieng|m|min|mins|minute|minutes|p|ph|phút|phut)/iu.test(source)
+    ) {
+      return null;
+    }
+    const cleaned = source
+      .replace(/\s+\d{1,2}\s*(?:h|hr|hrs|hour|hours|g|giờ|gio|tiếng|tieng)(?:\s*\d{1,2}\s*(?:m|min|mins|minute|minutes|p|ph|phút|phut))?.*$/iu, "")
+      .replace(/\s+\d{1,3}\s*(?:m|min|mins|minute|minutes|p|ph|phút|phut)\b.*$/iu, "")
+      .replace(/\s+[\d.,]+\s*%.*$/i, "")
+      .replace(/^[•·\-–—=_>]+\s*/, "")
+      .trim();
+    if (!cleaned || !/[a-zA-ZÀ-ỹ]/u.test(cleaned) || cleaned.split(/\s+/).length > 6) return null;
+
+    const normalized = normalizeSearchText(cleaned);
+    const interfacePhrases = [
+      "battery usage", "battery activity", "screen time", "screen on", "on screen", "show activity",
+      "daily average", "last week", "last 10 days", "background activity", "total usage",
+      "su dung pin", "hoat dong pin", "thoi gian man hinh", "hien thi hoat dong",
+      "trung binh hang ngay", "ung dung", "danh muc", "tat ca hoat dong", "tong thoi gian",
+      "used for", "da dung", "tuan nay", "dung nhieu nhat", "hien thi danh muc",
+      "most used", "most active", "show categories", "week", "this week",
+    ];
+    if (interfacePhrases.some((phrase) => normalized.includes(phrase))) {
+      return null;
+    }
+    if (/back\s*ground\s+activi(?:ty|fy|ly)|hoat\s+dong\s+(?:nen|ngam)|chay\s+nen/.test(normalized)) {
+      return null;
+    }
+    if (/^(today|yesterday|hom nay|hom qua|minutes?|hours?|gio|phut|settings?|ki)$/i.test(normalized)) {
+      return null;
+    }
+    return cleaned;
+  }
+
+  function pairOcrUsageRows(rawItems = []) {
+    const items = rawItems
+      .map((item, index) => {
+        const source = typeof item === "string" ? { text: item } : (item || {});
+        const text = String(source.text || source.rawValue || "").replace(/\s+/g, " ").trim();
+        const confidenceValue = Number(source.confidence);
+        return {
+          text,
+          x: finiteNumber(source.x ?? source.left, 0),
+          y: finiteNumber(source.y ?? source.top, index * 24),
+          width: Math.max(0, finiteNumber(source.width, 0)),
+          height: Math.max(1, finiteNumber(source.height, 20)),
+          confidence: Number.isFinite(confidenceValue)
+            ? Math.max(0, Math.min(1, confidenceValue > 1 ? confidenceValue / 100 : confidenceValue))
+            : 0.7,
+        };
+      })
+      .filter((item) => item.text)
+      .sort((left, right) => (left.y - right.y) || (left.x - right.x));
+
+    const listHeadings = items.filter((item) => {
+      const text = normalizeSearchText(item.text);
+      return /(?:dung nhieu nhat|hien thi danh muc|most used|most active|app usage)/.test(text);
+    });
+    const listStart = listHeadings.length
+      ? Math.max(...listHeadings.map((item) => item.y + item.height))
+      : -Infinity;
+    const listItems = items.filter((item) => item.y >= listStart);
+    const medianHeight = listItems.length
+      ? [...listItems].sort((left, right) => left.height - right.height)[Math.floor(listItems.length / 2)].height
+      : 20;
+    const maxGap = Math.max(72, medianHeight * 5);
+    const matches = [];
+
+    const durationRows = listItems
+      .map((item, index) => ({ item, index, minutes: parseScreenDuration(item.text) }))
+      .filter((row) => row.minutes !== null && row.minutes > 0 && row.minutes <= 1440);
+    let previousDurationY = listStart;
+
+    durationRows.forEach(({ item: timeItem, index: timeIndex, minutes }) => {
+      const inlineName = extractAppNameCandidate(timeItem.text);
+      const candidates = inlineName
+        ? [{ item: timeItem, name: inlineName, gap: 0 }]
+        : listItems
+            .slice(0, timeIndex)
+            .map((item) => ({
+              item,
+              name: parseScreenDuration(item.text) === null
+                ? extractAppNameCandidate(item.text)
+                : null,
+              gap: timeItem.y - item.y,
+            }))
+            .filter(({ item, name, gap }) => (
+              name && item.y > previousDurationY && gap >= 0 && gap <= maxGap
+            ));
+
+      const ranked = candidates
+        .map((candidate) => {
+          const { item, name, gap } = candidate;
+          const letters = name.replace(/[^a-zA-ZÀ-ỹ]/gu, "");
+          const words = name.match(/[a-zA-ZÀ-ỹ]+/gu) || [];
+          const hasSuspiciousSymbols = /[^a-zA-ZÀ-ỹ0-9 .&+'!_()-]/u.test(name);
+          const looksLikeFragment = /^[a-z]{2,8}$/u.test(name);
+          const startsLikeFragment = /^[a-zà-ỹ]/u.test(name) && !name.includes(".");
+          const hasStandaloneNumber = /(?:^|\s)\d+(?:\s|$)/.test(name);
+          const onlyShortWords = words.length > 1 && words.every((word) => word.length <= 3);
+          const score = item.confidence * 2
+            + Math.min(letters.length / 8, 1)
+            + (/^[A-ZÀ-Ỹ]/u.test(name) ? 0.45 : 0)
+            - (gap / maxGap) * 0.45
+            - (looksLikeFragment ? 2.4 : 0)
+            - (startsLikeFragment ? 1.5 : 0)
+            - (hasStandaloneNumber ? 2 : 0)
+            - (onlyShortWords ? 2 : 0)
+            - (hasSuspiciousSymbols ? 3 : 0);
+          return { ...candidate, score };
+        })
+        .filter(({ score }) => score >= 0.8)
+        .sort((left, right) => right.score - left.score);
+
+      previousDurationY = Math.max(previousDurationY, timeItem.y);
+      if (!ranked.length) return;
+
+      const { item, name } = ranked[0];
+      const key = normalizeSearchText(name);
+      const candidate = {
+        key,
+        name,
+        minutes,
+        confidence: Math.max(0.35, Math.min(item.confidence, timeItem.confidence)),
+      };
+      const existingIndex = matches.findIndex((match) => match.key === key);
+      if (existingIndex < 0) {
+        matches.push(candidate);
+      } else if (candidate.confidence > matches[existingIndex].confidence) {
+        matches[existingIndex] = candidate;
+      }
+    });
+
+    return matches;
+  }
+
   function validateContext(context = {}) {
     const normalized = normalizeContext(context);
     const categoryTotal = totalMinutes(normalized.usage);
@@ -245,6 +417,8 @@
     const productiveRatio = total > 0 ? productiveMinutes / total : 0;
     const leisureRatio = total > 0 ? leisureMinutes / total : 0;
     const socialRatio = total > 0 ? usage.social / total : 0;
+    const gamesRatio = total > 0 ? usage.games / total : 0;
+    const entertainmentRatio = total > 0 ? usage.entertainment / total : 0;
     const recoveryRatio = total > 0 ? usage.health / total : 0;
     const deepWorkRatio = total > 0 ? context.deep_work_minutes / total : 0;
     const lateNightRatio = total > 0 ? context.late_night_minutes / total : 0;
@@ -255,10 +429,14 @@
 
     let focusScore = Math.round(
       clamp(
-        42 +
-          productiveRatio * 42 +
-          Math.min(context.deep_work_minutes, 120) * 0.22 -
-          leisureRatio * 27 -
+        58 +
+          productiveRatio * 34 +
+          Math.min(context.deep_work_minutes, 120) * 0.18 +
+          recoveryRatio * 8 -
+          socialRatio * 16 -
+          gamesRatio * 24 -
+          entertainmentRatio * 18 -
+          Math.min((total / 60) * 1.4, 18) -
           Math.max(context.app_switches - 20, 0) * 0.16 -
           Math.max(context.late_night_minutes - 20, 0) * 0.11,
         0,
@@ -336,7 +514,7 @@
       factors.push({
         key: "screen-load",
         label: "Recorded screen load",
-        metrics: ["fatigue", "burnout"],
+        metrics: ["focus", "fatigue", "burnout"],
         strength: Math.min(100, Math.round((total / 480) * 100)),
         evidence: `${total} total minutes were recorded.`,
       });
@@ -437,7 +615,7 @@
           : "Keep the next change small enough to repeat tomorrow.",
       ]),
       alerts: [],
-      model_version: "shared-snapshot-v1",
+      model_version: "shared-snapshot-v2",
       source: "local-model",
     };
 
@@ -447,37 +625,8 @@
   function canonicalizePrediction(prediction, rawContext) {
     const canonical = calculatePrediction(rawContext);
     const source = prediction && prediction.source ? String(prediction.source) : canonical.source;
-    const scoreFields = [
-      "focus_score",
-      "mental_fatigue_score",
-      "fatigue_score",
-      "distraction_score",
-      "burnout_score",
-      "confidence",
-    ];
-
-    if (prediction && typeof prediction === "object") {
-      scoreFields.forEach((field) => {
-        if (Number.isFinite(Number(prediction[field]))) {
-          let value = Number(prediction[field]);
-          if (field === "confidence" && value <= 1) value *= 100;
-          canonical[field] = Math.round(clamp(value, 0, 100));
-        }
-      });
-      const fatigue = prediction.mental_fatigue_score ?? prediction.fatigue_score;
-      if (Number.isFinite(Number(fatigue))) {
-        canonical.mental_fatigue_score = Math.round(clamp(Number(fatigue), 0, 100));
-        canonical.fatigue_score = canonical.mental_fatigue_score;
-      }
-      canonical.burnout_risk = burnoutRisk(canonical.burnout_score);
-      canonical.labels = {
-        focus: scoreLabel("focus", canonical.focus_score),
-        fatigue: scoreLabel("fatigue", canonical.mental_fatigue_score),
-        distraction: scoreLabel("distraction", canonical.distraction_score),
-        burnout: scoreLabel("burnout", canonical.burnout_score),
-      };
-    }
-
+    // Scores always come from the current normalized snapshot. This prevents a stale API
+    // response or legacy stored result from overriding the shared deterministic model.
     canonical.source = source;
     return canonical;
   }
@@ -488,7 +637,9 @@
     const items = Array.isArray(extraction.items)
       ? extraction.items.map((item) => ({
           app: String(item.app || "Unknown app").trim(),
-          category: CATEGORIES.includes(item.category) ? item.category : "entertainment",
+          category: CATEGORIES.includes(item.category) || item.category === "ignore"
+            ? item.category
+            : "",
           minutes: wholeMinutes(item.minutes),
           confidence: clamp(finiteNumber(item.confidence), 0, 1),
         }))
@@ -684,6 +835,8 @@
     const hasVietnamesePhrase = [
       "toi nen", "lam gi", "tai sao", "vi sao", "ngay mai", "cam thay", "tap trung",
       "met moi", "xao nhang", "kiet suc", "xu huong", "man hinh", "giup toi",
+      "ban co", "giam bot", "thoi gian su dung", "cam on", "xin chao", "cang thang",
+      "thu gian", "oke",
     ].some((phrase) => normalized.includes(phrase));
     return hasVietnameseCharacter || hasVietnamesePhrase ? "vi" : "en";
   }
@@ -692,12 +845,21 @@
     const normalized = normalizeMentorText(question);
     const matches = (terms) => terms.some((term) => normalized.includes(term));
 
+    if (/^(?:ok+|oke+|okay|u|uh|uhm|um|duoc|hieu roi|got it)[.!\s]*$/.test(normalized)) return "acknowledge";
+    if (matches(["thank you", "thanks", "cam on", "cảm ơn"])) return "thanks";
+    if (matches(["hello", "hi there", "good morning", "good evening", "xin chao", "chao ban"])) return "greeting";
+    if (matches(["what can you do", "how can you help", "ban lam duoc gi", "ban co the lam gi", "co the hoi gi"])) return "capabilities";
+    if (matches([
+      "reduce screen time", "use my phone less", "use less", "cut down", "too much screen time",
+      "giam thoi gian", "giam bot thoi gian", "giam screen time", "co nen giam", "dung dien thoai it",
+    ])) return "screen_time";
+    if (matches(["stress", "stressed", "relax", "sleep better", "cang thang", "thu gian", "ngu ngon", "nghi ngoi"])) return "wellbeing";
     if (matches(["plan tomorrow", "tomorrow plan", "plan my day", "tomorrow", "ke hoach ngay mai", "ngay mai"])) return "plan";
     if (matches(["why", "change", "cause", "reason", "contributor", "tai sao", "vi sao", "thay doi", "nguyen nhan"])) return "explain";
     if (matches(["how might i feel", "how will i feel", "how i feel", "feel today", "emotion", "cam thay", "tam trang"])) {
       return "feel";
     }
-    if (matches(["what should i do", "what can i do", "next step", "recommend", "help me", "toi nen lam gi", "nen lam gi", "loi khuyen", "giup toi"])) {
+    if (matches(["what should i do", "what can i do", "next step", "recommend", "help me", "toi nen lam gi", "nen lam gi", "loi khuyen", "giup toi", "toi co nen", "co nen"])) {
       return "action";
     }
     if (matches(["trend", "week", "history", "improving", "baseline", "xu huong", "tuan", "lich su"])) return "trend";
@@ -744,6 +906,23 @@
     const intent = detectMentorIntent(question);
     const snapshot = latestSnapshot ? normalizeSnapshot(latestSnapshot, latestSnapshot.date) : null;
 
+    const basicAnswers = language === "vi"
+      ? {
+          acknowledge: "Ừ, mình hiểu rồi. Bạn cứ hỏi tiếp điều bạn muốn biết về screen time hoặc kế hoạch ngày mai nhé.",
+          thanks: "Không có gì. Mình ở đây nếu bạn muốn xem lại dữ liệu hoặc chọn một bước nhỏ cho ngày mai.",
+          greeting: "Chào bạn. Mình có thể giúp giải thích điểm số, xem yếu tố ảnh hưởng, điều chỉnh screen time hoặc lập kế hoạch cho ngày mai.",
+          capabilities: "Bạn có thể hỏi mình: vì sao điểm tập trung thay đổi, có nên giảm screen time không, nhóm app nào ảnh hưởng nhiều nhất, xu hướng tuần này, hoặc nên làm gì ngày mai.",
+        }
+      : {
+          acknowledge: "Got it. Ask me anything else about your screen time or tomorrow's plan.",
+          thanks: "You're welcome. I can help review the data or choose one small next step whenever you want.",
+          greeting: "Hello. I can explain your scores, identify the strongest contributor, help adjust screen time, or plan tomorrow.",
+          capabilities: "You can ask why focus changed, whether to reduce screen time, which app category mattered most, what the week shows, or what to do tomorrow.",
+        };
+    if (basicAnswers[intent]) {
+      return { language, intent, answer: basicAnswers[intent], evidence: "", action: "" };
+    }
+
     if (!snapshot || !snapshot.validation.valid) {
       return {
         language,
@@ -768,7 +947,19 @@
       const dominantLabelVi = CATEGORY_LABELS_VI[result.dominant_category];
       const evidenceVi = `${dominantLabelVi} chiếm ${dominantPercent}% thời gian màn hình đã ghi nhận.`;
       const actionVi = vietnameseAction(result.primary_action);
-      if (intent === "feel") {
+      if (intent === "screen_time") {
+        const reducibleCategories = ["social", "games", "entertainment"];
+        const reducibleCategory = reducibleCategories.reduce((largest, category) => (
+          result.usage[category] > result.usage[largest] ? category : largest
+        ), reducibleCategories[0]);
+        const reducibleMinutes = result.usage[reducibleCategory];
+        const reduction = Math.min(30, Math.max(10, Math.round((reducibleMinutes * 0.15) / 5) * 5));
+        answer = reducibleMinutes >= 30
+          ? `Có, nhưng bạn không cần giảm tất cả. Hãy thử giảm khoảng ${reduction} phút ở nhóm ${CATEGORY_LABELS_VI[reducibleCategory]} đang chiếm nhiều thời gian nhất, rồi giữ nguyên thời gian học hoặc công việc cần thiết. Sau vài ngày, hãy xem điểm và cảm nhận của bạn có thay đổi không.`
+          : `Dữ liệu hiện chưa cho thấy cần cắt giảm mạnh. Hãy ưu tiên dùng màn hình có chủ đích, nghỉ ngắn giữa các phiên và giữ một giờ dừng ổn định.`;
+      } else if (intent === "wellbeing") {
+        answer = `Dữ liệu màn hình không thể đo mức căng thẳng của bạn. Để ngày mai nhẹ hơn, ${actionVi.toLowerCase()} Thêm một khoảng nghỉ không màn hình 5–10 phút và dừng thiết bị sớm hơn trước khi ngủ nếu có thể.`;
+      } else if (intent === "feel") {
         answer = `Dữ liệu thời gian màn hình không thể xác định chính xác cảm xúc của bạn. Dữ liệu chỉ cho thấy ${dominantLabelVi} chiếm ${dominantPercent}% thời gian sử dụng và ước tính tập trung là ${result.focus_score}/100. Hãy tự kiểm tra xem lúc này bạn đang tràn đầy năng lượng, bình thường, phân tán hay mệt mỏi.`;
       } else if (intent === "action") {
         answer = `Bước hữu ích nhất lúc này là: ${actionVi} Đây là một thay đổi nhỏ, cụ thể và dễ lặp lại.`;
@@ -784,12 +975,24 @@
       } else if (intent === "metric") {
         answer = `Ước tính tập trung mới nhất là ${result.focus_score}/100 với độ tin cậy ${result.confidence}%. ${evidenceVi} ${vietnameseHistorySentence(snapshot, snapshots)}`;
       } else {
-        answer = `Mình có thể giải thích điểm số hôm nay, yếu tố ảnh hưởng mạnh nhất hoặc lập một kế hoạch nhỏ cho ngày mai. ${evidenceVi}`;
+        answer = "Mình chưa hiểu rõ câu hỏi đó. Bạn có thể nói cụ thể hơn, ví dụ: “Tôi có nên giảm screen time không?”, “Vì sao điểm tập trung thay đổi?” hoặc “Lập kế hoạch cho ngày mai”.";
       }
       return { language, intent, answer, evidence: evidenceVi, action: actionVi };
     }
 
-    if (intent === "feel") {
+    if (intent === "screen_time") {
+      const reducibleCategories = ["social", "games", "entertainment"];
+      const reducibleCategory = reducibleCategories.reduce((largest, category) => (
+        result.usage[category] > result.usage[largest] ? category : largest
+      ), reducibleCategories[0]);
+      const reducibleMinutes = result.usage[reducibleCategory];
+      const reduction = Math.min(30, Math.max(10, Math.round((reducibleMinutes * 0.15) / 5) * 5));
+      answer = reducibleMinutes >= 30
+        ? `You do not need to cut all screen time. Try reducing ${CATEGORY_LABELS[reducibleCategory].toLowerCase()} by about ${reduction} minutes while keeping necessary work or learning time. Review the change after a few days.`
+        : "The current data does not suggest a large cut. Use screens intentionally, take short breaks, and keep a consistent stopping time.";
+    } else if (intent === "wellbeing") {
+      answer = `Screen-time data cannot measure stress. To make tomorrow feel lighter, ${action} Add a 5–10 minute screen-free break and stop using devices earlier before sleep if practical.`;
+    } else if (intent === "feel") {
       answer =
         `Screen-time metadata cannot determine how you feel. It only shows that ${dominantLabel} represented ${dominantPercent}% of recorded use and your focus estimate is ${result.focus_score}/100. ` +
         "Use that as a prompt to check in with yourself: do you feel energized, neutral, scattered, or tired right now?";
@@ -818,9 +1021,7 @@
         `Your latest focus estimate is ${result.focus_score}/100 (${result.labels.focus.toLowerCase()}) with ${result.confidence}% model confidence. ` +
         `${evidence} ${historySentence(snapshot, snapshots)}`;
     } else {
-      answer =
-        `I can help explain today's estimate, identify the strongest contributor, or make a small plan for tomorrow. ` +
-        `For the latest snapshot, ${evidence.toLowerCase()}`;
+      answer = "I did not fully understand that question. Try asking whether to reduce screen time, why focus changed, what affected today's score, or how to plan tomorrow.";
     }
 
     return { language, intent, answer, evidence, action };
@@ -832,6 +1033,9 @@
     CATEGORY_LABELS,
     localDateKey,
     normalizeUsage,
+    parseScreenDuration,
+    extractAppNameCandidate,
+    pairOcrUsageRows,
     normalizeContext,
     totalMinutes,
     validateContext,

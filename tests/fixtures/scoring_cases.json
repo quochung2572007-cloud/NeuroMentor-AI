@@ -16,7 +16,7 @@
       "launch_count": 80
     },
     "expected": {
-      "focus_score": 33,
+      "focus_score": 47,
       "fatigue_score": 23,
       "distraction_score": 55,
       "burnout_score": 25,
@@ -41,7 +41,7 @@
       "launch_count": 25
     },
     "expected": {
-      "focus_score": 80,
+      "focus_score": 82,
       "fatigue_score": 19,
       "distraction_score": 15,
       "burnout_score": 10,

@@ -42,6 +42,110 @@ test('validation rejects a reported-total mismatch', () => {
   assert.match(validation.errors[0], /add up to 90 minutes/i);
 });
 
+test('unknown OCR app names remain available for user classification', () => {
+  assert.strictEqual(Core.extractAppNameCandidate('WorkZone.io 3%'), 'WorkZone.io');
+  assert.strictEqual(Core.extractAppNameCandidate('Ariana'), 'Ariana');
+  assert.strictEqual(Core.extractAppNameCandidate('Unknown App 1h 20m'), 'Unknown App');
+  assert.strictEqual(Core.extractAppNameCandidate('Battery Usage'), null);
+  assert.strictEqual(Core.extractAppNameCandidate('Ứng dụng'), null);
+  assert.strictEqual(Core.extractAppNameCandidate('Tuần này'), null);
+  assert.strictEqual(Core.extractAppNameCandidate('Dùng nhiều nhất'), null);
+  assert.strictEqual(Core.extractAppNameCandidate('2g 9ph'), null);
+  assert.strictEqual(Core.extractAppNameCandidate('(z= Background activity for'), null);
+  assert.strictEqual(Core.extractAppNameCandidate('Other Battery Usage'), null);
+});
+
+test('Vietnamese screen-time durations are converted to minutes', () => {
+  assert.strictEqual(Core.parseScreenDuration('2g 9ph'), 129);
+  assert.strictEqual(Core.parseScreenDuration('1g 46ph'), 106);
+  assert.strictEqual(Core.parseScreenDuration('51ph'), 51);
+  assert.strictEqual(Core.parseScreenDuration('24 phút'), 24);
+});
+
+test('OCR rows pair app names with nearby usage times and ignore interface headings', () => {
+  const matches = Core.pairOcrUsageRows([
+    { text: 'Tuần này', x: 300, y: 100, height: 34, confidence: 95 },
+    { text: 'Dùng nhiều nhất', x: 70, y: 180, height: 28, confidence: 92 },
+    { text: 'Hiển thị danh mục', x: 500, y: 180, height: 28, confidence: 90 },
+    { text: 'Liên Quân Mobile', x: 180, y: 250, height: 38, confidence: 96 },
+    { text: '2g 9ph', x: 670, y: 294, height: 24, confidence: 84 },
+    { text: 'TikTok', x: 180, y: 370, height: 38, confidence: 97 },
+    { text: '1g 46ph', x: 670, y: 414, height: 24, confidence: 86 },
+    { text: 'Block Blast!', x: 180, y: 490, height: 38, confidence: 95 },
+    { text: '51ph', x: 390, y: 534, height: 24, confidence: 80 },
+    { text: 'Messenger', x: 180, y: 610, height: 38, confidence: 98 },
+    { text: '24ph', x: 290, y: 654, height: 24, confidence: 82 },
+  ]);
+  assert.deepStrictEqual(
+    matches.map(match => [match.name, match.minutes]),
+    [
+      ['Liên Quân Mobile', 129],
+      ['TikTok', 106],
+      ['Block Blast!', 51],
+      ['Messenger', 24],
+    ],
+  );
+});
+
+test('background activity is not emitted as an OCR app row', () => {
+  const matches = Core.pairOcrUsageRows([
+    { text: 'TikTok', y: 100, height: 28, confidence: 94 },
+    { text: '15m on screen', y: 134, height: 18, confidence: 90 },
+    { text: '(z= Background activity for', y: 158, height: 18, confidence: 84 },
+    { text: '17m', y: 180, height: 18, confidence: 88 },
+    { text: 'Messenger', y: 230, height: 28, confidence: 96 },
+    { text: '9m on screen', y: 264, height: 18, confidence: 91 },
+  ]);
+  assert.deepStrictEqual(
+    matches.map(match => [match.name, match.minutes]),
+    [['TikTok', 15], ['Messenger', 9]],
+  );
+});
+
+test('OCR fragments and icon artifacts are not emitted as apps', () => {
+  const matches = Core.pairOcrUsageRows([
+    { text: 'enesss', y: 100, height: 18, confidence: 88 },
+    { text: '24m', y: 126, height: 18, confidence: 90 },
+    { text: 'Tài liệu', y: 190, height: 26, confidence: 82 },
+    { text: 'esse', y: 195, height: 16, confidence: 86 },
+    { text: '23m', y: 224, height: 18, confidence: 91 },
+    { text: 'Almanac', y: 290, height: 26, confidence: 84 },
+    { text: 'w ==', y: 294, height: 16, confidence: 80 },
+    { text: '10m', y: 324, height: 18, confidence: 90 },
+  ]);
+  assert.deepStrictEqual(
+    matches.map(match => [match.name, match.minutes]),
+    [['Tài liệu', 23], ['Almanac', 10]],
+  );
+});
+
+test('unidentified OCR garbage is not shown for user classification', () => {
+  const matches = Core.pairOcrUsageRows([
+    { text: 'w ae»', y: 100, height: 18, confidence: 86 },
+    { text: '10m', y: 126, height: 18, confidence: 90 },
+    { text: 'sap OTAD 5', y: 190, height: 18, confidence: 88 },
+    { text: '3m', y: 216, height: 18, confidence: 92 },
+    { text: 'NTH oe', y: 280, height: 18, confidence: 89 },
+    { text: '2m', y: 306, height: 18, confidence: 91 },
+  ]);
+  assert.deepStrictEqual(matches, []);
+});
+
+test('unclassified and ignored extraction rows are preserved for review', () => {
+  const snapshot = Core.createDailySnapshot({
+    context: fixtures[0].context,
+    extraction: {
+      status: 'ready',
+      items: [
+        { app: 'Ariana', category: '', minutes: 0, confidence: 0.24 },
+        { app: 'System UI', category: 'ignore', minutes: 0, confidence: 0.2 },
+      ],
+    },
+  });
+  assert.strictEqual(snapshot.extraction.items[0].category, '');
+  assert.strictEqual(snapshot.extraction.items[1].category, 'ignore');
+});
+
 fixtures.forEach(fixture => {
   test(`calculation fixture: ${fixture.name}`, () => {
     const result = Core.calculatePrediction(fixture.context);
@@ -53,6 +157,25 @@ fixtures.forEach(fixture => {
     assert.strictEqual(result.confidence, expected.confidence_percent);
     assert.strictEqual(result.total_minutes, expected.total_minutes);
   });
+});
+
+test('focus responds to category mix and total screen load', () => {
+  const social = Core.calculatePrediction({ usage: { social: 120 } }).focus_score;
+  const games = Core.calculatePrediction({ usage: { games: 120 } }).focus_score;
+  const entertainment = Core.calculatePrediction({ usage: { entertainment: 120 } }).focus_score;
+  const longGaming = Core.calculatePrediction({ usage: { games: 600 } }).focus_score;
+  assert.deepStrictEqual([social, games, entertainment], [39, 31, 37]);
+  assert.strictEqual(new Set([social, games, entertainment]).size, 3);
+  assert.ok(longGaming < games, `${longGaming} should be lower than ${games}`);
+});
+
+test('stale API scores cannot override the current snapshot calculation', () => {
+  const result = Core.canonicalizePrediction(
+    { focus_score: 15, source: 'cloud' },
+    { usage: { games: 120 } },
+  );
+  assert.strictEqual(result.focus_score, 31);
+  assert.strictEqual(result.source, 'cloud');
 });
 
 test('daily snapshot keeps context and result consistent', () => {
@@ -126,4 +249,27 @@ test('Mentor detects Vietnamese and answers in Vietnamese', () => {
     assert.doesNotMatch(response.answer, /Screen-time metadata/i);
   });
   assert.strictEqual(Core.detectMentorLanguage('Toi nen lam gi?'), 'vi');
+});
+
+test('Mentor handles basic conversation without repeating the default report', () => {
+  const snapshot = Core.createDailySnapshot({ date: '2026-06-20', context: fixtures[0].context });
+  const acknowledgement = Core.buildMentorResponse('oke', snapshot, [snapshot]);
+  assert.strictEqual(acknowledgement.language, 'vi');
+  assert.strictEqual(acknowledgement.intent, 'acknowledge');
+  assert.strictEqual(acknowledgement.evidence, '');
+  assert.strictEqual(acknowledgement.action, '');
+  assert.doesNotMatch(acknowledgement.answer, /ước tính tập trung|focus estimate/i);
+
+  const reduction = Core.buildMentorResponse(
+    'Tôi có nên giảm bớt thời gian sử dụng không?',
+    snapshot,
+    [snapshot],
+  );
+  assert.strictEqual(reduction.intent, 'screen_time');
+  assert.match(reduction.answer, /giảm khoảng|không cần cắt giảm mạnh/i);
+  assert.doesNotMatch(reduction.answer, /mình chưa hiểu rõ/i);
+
+  const unknown = Core.buildMentorResponse('Câu này hơi khác một chút', snapshot, [snapshot]);
+  assert.strictEqual(unknown.intent, 'general');
+  assert.match(unknown.answer, /chưa hiểu rõ/i);
 });

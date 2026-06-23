@@ -39,7 +39,7 @@
 
       test('shared scoring fixture', () => {
         const result = NeuroMentorCore.calculatePrediction(context);
-        assert(result.focus_score === 33, `focus was ${result.focus_score}`);
+        assert(result.focus_score === 47, `focus was ${result.focus_score}`);
         assert(result.fatigue_score === 23, `fatigue was ${result.fatigue_score}`);
         assert(result.total_minutes === 270, `total was ${result.total_minutes}`);
       });
@@ -49,6 +49,85 @@
           reported_total_minutes: 120,
         });
         assert(!result.valid, 'mismatched total should be invalid');
+      });
+      test('unknown OCR app names remain available for review', () => {
+        assert(
+          NeuroMentorCore.extractAppNameCandidate('WorkZone.io 3%') === 'WorkZone.io',
+          'app name with percentage was not retained',
+        );
+        assert(
+          NeuroMentorCore.extractAppNameCandidate('Unknown App 1h 20m') === 'Unknown App',
+          'app name with duration was not retained',
+        );
+        assert(
+          NeuroMentorCore.extractAppNameCandidate('Battery Usage') === null,
+          'interface heading was mistaken for an app',
+        );
+      });
+      test('Vietnamese OCR rows include automatic usage minutes', () => {
+        const matches = NeuroMentorCore.pairOcrUsageRows([
+          { text: 'Dùng nhiều nhất', y: 100, height: 24 },
+          { text: 'Liên Quân Mobile', y: 160, height: 32 },
+          { text: '2g 9ph', y: 198, height: 20 },
+          { text: 'TikTok', y: 260, height: 32 },
+          { text: '1g 46ph', y: 298, height: 20 },
+        ]);
+        assert(matches.length === 2, `expected 2 app rows, got ${matches.length}`);
+        assert(matches[0].minutes === 129, `Liên Quân was ${matches[0].minutes} minutes`);
+        assert(matches[1].minutes === 106, `TikTok was ${matches[1].minutes} minutes`);
+      });
+      test('background activity is not treated as an app', () => {
+        const matches = NeuroMentorCore.pairOcrUsageRows([
+          { text: 'TikTok', y: 100, height: 28 },
+          { text: '15m on screen', y: 134, height: 18 },
+          { text: '(z= Background activity for', y: 158, height: 18 },
+          { text: '17m', y: 180, height: 18 },
+          { text: 'Messenger', y: 230, height: 28 },
+          { text: '9m on screen', y: 264, height: 18 },
+        ]);
+        assert(matches.length === 2, `expected 2 apps, got ${matches.length}`);
+        assert(matches.every(match => !/background/i.test(match.name)), 'background row was retained');
+      });
+      test('OCR fragments are not treated as apps', () => {
+        const matches = NeuroMentorCore.pairOcrUsageRows([
+          { text: 'enesss', y: 100, height: 18, confidence: 88 },
+          { text: '24m', y: 126, height: 18, confidence: 90 },
+          { text: 'Tài liệu', y: 190, height: 26, confidence: 82 },
+          { text: 'esse', y: 195, height: 16, confidence: 86 },
+          { text: '23m', y: 224, height: 18, confidence: 91 },
+          { text: 'Almanac', y: 290, height: 26, confidence: 84 },
+          { text: 'w ==', y: 294, height: 16, confidence: 80 },
+          { text: '10m', y: 324, height: 18, confidence: 90 },
+        ]);
+        assert(matches.length === 2, `expected 2 real apps, got ${matches.length}`);
+        assert(matches[0].name === 'Tài liệu', `first app was ${matches[0]?.name}`);
+        assert(matches[1].name === 'Almanac', `second app was ${matches[1]?.name}`);
+      });
+      test('unidentified OCR garbage is not shown', () => {
+        const matches = NeuroMentorCore.pairOcrUsageRows([
+          { text: 'w ae»', y: 100, height: 18, confidence: 86 },
+          { text: '10m', y: 126, height: 18, confidence: 90 },
+          { text: 'sap OTAD 5', y: 190, height: 18, confidence: 88 },
+          { text: '3m', y: 216, height: 18, confidence: 92 },
+          { text: 'NTH oe', y: 280, height: 18, confidence: 89 },
+          { text: '2m', y: 306, height: 18, confidence: 91 },
+        ]);
+        assert(matches.length === 0, `expected no garbage rows, got ${matches.length}`);
+      });
+      test('focus changes with category mix and screen load', () => {
+        const social = NeuroMentorCore.calculatePrediction({ usage: { social: 120 } }).focus_score;
+        const games = NeuroMentorCore.calculatePrediction({ usage: { games: 120 } }).focus_score;
+        const entertainment = NeuroMentorCore.calculatePrediction({ usage: { entertainment: 120 } }).focus_score;
+        const longGaming = NeuroMentorCore.calculatePrediction({ usage: { games: 600 } }).focus_score;
+        assert(new Set([social, games, entertainment]).size === 3, 'category scores were identical');
+        assert(longGaming < games, 'screen load did not affect focus');
+      });
+      test('stale API focus cannot override the current snapshot', () => {
+        const result = NeuroMentorCore.canonicalizePrediction(
+          { focus_score: 15, source: 'cloud' },
+          { usage: { games: 120 } },
+        );
+        assert(result.focus_score === 31, `stale API score remained ${result.focus_score}`);
       });
       test('missing trend days stay missing', () => {
         const snapshot = NeuroMentorCore.createDailySnapshot({ date: '2026-06-20', context });
@@ -98,6 +177,19 @@
         assert(response.language === 'vi', `language was ${response.language}`);
         assert(response.intent === 'action', `intent was ${response.intent}`);
         assert(/Bước hữu ích nhất/.test(response.answer), 'Vietnamese response text missing');
+      });
+      test('Mentor handles acknowledgement and screen-time questions', () => {
+        const snapshot = NeuroMentorCore.createDailySnapshot({ date: '2026-06-20', context });
+        const acknowledgement = NeuroMentorCore.buildMentorResponse('oke', snapshot, [snapshot]);
+        const reduction = NeuroMentorCore.buildMentorResponse(
+          'Tôi có nên giảm bớt thời gian sử dụng không?',
+          snapshot,
+          [snapshot],
+        );
+        assert(acknowledgement.intent === 'acknowledge', `intent was ${acknowledgement.intent}`);
+        assert(!acknowledgement.evidence && !acknowledgement.action, 'acknowledgement included report details');
+        assert(reduction.intent === 'screen_time', `intent was ${reduction.intent}`);
+        assert(/giảm khoảng|không cần cắt giảm mạnh/i.test(reduction.answer), 'reduction advice missing');
       });
 
       if (document.body.dataset.testStatus !== 'failed') {

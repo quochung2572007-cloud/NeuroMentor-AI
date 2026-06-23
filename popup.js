@@ -1497,6 +1497,7 @@ function metricContributors(result, context) {
   return {
     focus: [
       dominantLabel,
+      `${formatMinutes(result.total_minutes)} total screen load`,
       context.deep_work_minutes >= 25
         ? `${context.deep_work_minutes} minutes of protected deep work`
         : 'No sustained deep-work block',
@@ -1805,6 +1806,7 @@ function buildLocalMentorResponse(question) {
   const response = Core.buildMentorResponse(question, currentSnapshot, snapshots);
   return {
     language: response.language,
+    intent: response.intent,
     answer: response.answer,
     evidence: [response.evidence],
     next_steps: [response.action],
@@ -1816,6 +1818,10 @@ function buildLocalMentorResponse(question) {
 
 async function requestMentorResponse(question) {
   const fallback = buildLocalMentorResponse(question);
+  const localIntents = new Set([
+    'acknowledge', 'thanks', 'greeting', 'capabilities', 'screen_time', 'wellbeing', 'general',
+  ]);
+  if (localIntents.has(fallback.intent)) return fallback;
   if (!currentSnapshot.validation.valid) return fallback;
 
   const recentHistory = snapshots
@@ -1902,10 +1908,18 @@ const OCR_APP_ALIASES = [
   },
   {
     key: 'lien quan',
-    name: 'Lien Quan Mobile',
+    name: 'Liên Quân Mobile',
     category: 'games',
     patterns: [/\bli.?n\s+qu.?n\b/, /\blien\s*quan\b/],
   },
+  { key: 'tiktok', name: 'TikTok', category: 'entertainment', patterns: [/\btik\s*tok\b/] },
+  { key: 'block blast', name: 'Block Blast!', category: 'games', patterns: [/\bblock\s*blast\b/] },
+  { key: 'tai lieu', name: 'Tài liệu', category: 'productivity', patterns: [/\btai\s*lieu\b/] },
+  { key: 'wormszone', name: 'WormsZone.io', category: 'games', patterns: [/\bworms?\s*zone(?:\.io)?\b/] },
+  { key: 'mb bank', name: 'MB Bank', category: 'productivity', patterns: [/\bmb\s*bank\b/] },
+  { key: 'grab', name: 'Grab', category: 'productivity', patterns: [/\b[gc]rab\b/] },
+  { key: 'dich tflat', name: 'Dịch TFlat', category: 'learning', patterns: [/\bdich\s*t\s*flat\b/, /\btflat\b/] },
+  { key: 'google', name: 'Google', category: 'productivity', patterns: [/\bgoogle\b/] },
 ];
 
 function titleCase(value) {
@@ -1922,82 +1936,113 @@ function inferOcrApp(text) {
       category: alias.category,
     };
   }
-  const match = OCR_APP_KEYWORDS.find(({ keyword }) => normalized.includes(keyword));
+  const match = OCR_APP_KEYWORDS.find(({ keyword }) => {
+    const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(?:^|\\s)${escaped}(?=$|[\\s.!()_-])`).test(normalized);
+  });
   if (!match) return null;
   return {
     key: match.keyword,
-    name: titleCase(match.keyword),
+    name: Core.extractAppNameCandidate(text) || titleCase(match.keyword),
     category: match.category,
   };
 }
 
-function parseDuration(text) {
-  const normalized = normalizeText(text);
-  const hourUnits = '(?:h|hr|hrs|hour|hours|g|gio|tieng)';
-  const minuteUnits = "(?:m|min|mins|minute|minutes|p|ph|phut|['’′])";
-  const hoursAndMinutes = normalized.match(
-    new RegExp(`(\\d{1,2})\\s*${hourUnits}\\s*(\\d{1,2})\\s*${minuteUnits}`),
-  );
-  if (hoursAndMinutes) return Number(hoursAndMinutes[1]) * 60 + Number(hoursAndMinutes[2]);
-  const compactHoursAndMinutes = normalized.match(
-    new RegExp(`(\\d{1,2})\\s*${hourUnits}\\s*(\\d{1,2})(?!\\s*%)`),
-  );
-  if (compactHoursAndMinutes) {
-    return Number(compactHoursAndMinutes[1]) * 60 + Number(compactHoursAndMinutes[2]);
-  }
-  const hours = normalized.match(new RegExp(`(\\d{1,2})\\s*${hourUnits}`));
-  if (hours) return Number(hours[1]) * 60;
-  const minutes = normalized.match(
-    new RegExp(`(\\d{1,3})\\s*${minuteUnits}`),
-  );
-  return minutes ? Number(minutes[1]) : null;
-}
-
-function extractPrimaryScreenTime(rowLines) {
-  const joined = normalizeText(rowLines.join(' '));
-  const durationPattern = [
-    '\\d{1,2}\\s*(?:h|hr|hrs|hour|hours|g|gio|tieng)',
-    "(?:(?:\\s*\\d{1,2}\\s*(?:m|min|mins|minute|minutes|p|ph|phut|['’′]))|(?:\\s*\\d{1,2}(?!\\s*%)))?",
-    "|\\d{1,3}\\s*(?:m|min|mins|minute|minutes|p|ph|phut|['’′])",
-  ].join('');
-  const primaryPattern = new RegExp(
-    [
-      '(?:on\\s*screen|screen\\s*on|screen\\s*time',
-      '|man\\s*hinh(?:\\s*b.?t)?|b.?t\\s*man\\s*hinh',
-      '|thoi\\s*gian\\s*man\\s*hinh)',
-      '\\s*(?:for\\s*)?(?:time\\s*)?[:\\-]?\\s*',
-      `(${durationPattern})`,
-    ].join(''),
-  );
-  const primary = joined.match(primaryPattern);
-  if (primary) {
-    const minutes = parseDuration(primary[1]);
-    if (minutes !== null && minutes <= 1440) return { minutes, confidence: 2 };
-  }
-
-  const fallbackLine = rowLines.find(line => {
-    const normalized = normalizeText(line);
-    return parseDuration(normalized) !== null
-      && !/(?:background|average|compared|last week|longer|less|battery|charging|chay nen|nen)/.test(normalized)
-      && !/%/.test(normalized);
+function canonicalizeKnownOcrItems(items) {
+  return items.map(item => {
+    if (!Core.extractAppNameCandidate(item.text)) return item;
+    const recognizedApp = inferOcrApp(item.text);
+    if (!recognizedApp) return item;
+    const minutes = Core.parseScreenDuration(item.text);
+    return {
+      ...item,
+      text: minutes === null ? recognizedApp.name : `${recognizedApp.name} ${minutes}m`,
+    };
   });
-  const minutes = fallbackLine ? parseDuration(fallbackLine) : null;
-  return minutes !== null && minutes <= 1440
-    ? { minutes, confidence: 1 }
-    : null;
 }
 
-function extractTextLines(detections) {
+function extractTextItems(detections) {
   return detections
     .filter(item => item.rawValue?.trim())
-    .sort((a, b) => {
-      const left = a.boundingBox || { x: 0, y: 0 };
-      const right = b.boundingBox || { x: 0, y: 0 };
-      return (left.y - right.y) || (left.x - right.x);
+    .flatMap(item => {
+      const box = item.boundingBox || { x: 0, y: 0, width: 0, height: 20 };
+      const lines = item.rawValue.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+      const lineHeight = Math.max(1, box.height / Math.max(1, lines.length));
+      return lines.map((text, index) => ({
+        text,
+        x: box.x,
+        y: box.y + (index * lineHeight),
+        width: box.width,
+        height: lineHeight,
+        confidence: 0.78,
+      }));
     })
-    .flatMap(item => item.rawValue.split(/\r?\n/))
-    .map(line => line.trim())
-    .filter(Boolean);
+    .sort((left, right) => (left.y - right.y) || (left.x - right.x));
+}
+
+function extractTesseractItems(tsv = '') {
+  const groups = new Map();
+  tsv.split(/\r?\n/).slice(1).forEach(row => {
+    const columns = row.split('\t');
+    if (columns.length < 12 || columns[0] !== '5') return;
+    const text = columns.slice(11).join('\t').trim();
+    if (!text) return;
+    const key = columns.slice(1, 5).join(':');
+    const left = Number(columns[6]) || 0;
+    const top = Number(columns[7]) || 0;
+    const width = Number(columns[8]) || 0;
+    const height = Number(columns[9]) || 20;
+    const confidence = Math.max(0, Number(columns[10]) || 0);
+    const group = groups.get(key) || {
+      words: [], x: left, y: top, right: left + width, bottom: top + height, confidences: [],
+    };
+    group.words.push({ text, x: left });
+    group.x = Math.min(group.x, left);
+    group.y = Math.min(group.y, top);
+    group.right = Math.max(group.right, left + width);
+    group.bottom = Math.max(group.bottom, top + height);
+    if (confidence > 0) group.confidences.push(confidence);
+    groups.set(key, group);
+  });
+
+  return [...groups.values()].map(group => ({
+    text: group.words.sort((left, right) => left.x - right.x).map(word => word.text).join(' '),
+    x: group.x,
+    y: group.y,
+    width: group.right - group.x,
+    height: group.bottom - group.y,
+    confidence: group.confidences.length
+      ? group.confidences.reduce((sum, value) => sum + value, 0) / group.confidences.length / 100
+      : 0.55,
+  })).sort((left, right) => (left.y - right.y) || (left.x - right.x));
+}
+
+async function enhanceScreenshotForOcr(file) {
+  const bitmap = await createImageBitmap(file);
+  try {
+    const scale = Math.max(1, Math.min(2, 1800 / bitmap.width));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(bitmap.width * scale);
+    canvas.height = Math.round(bitmap.height * scale);
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const image = context.getImageData(0, 0, canvas.width, canvas.height);
+    for (let index = 0; index < image.data.length; index += 4) {
+      const luminance = (image.data[index] * 0.299)
+        + (image.data[index + 1] * 0.587)
+        + (image.data[index + 2] * 0.114);
+      const value = luminance >= 245
+        ? 255
+        : Math.max(0, Math.min(255, ((luminance - 205) * 3) + 128));
+      image.data[index] = value;
+      image.data[index + 1] = value;
+      image.data[index + 2] = value;
+    }
+    context.putImageData(image, 0, 0);
+    return await new Promise(resolve => canvas.toBlob(blob => resolve(blob || file), 'image/png'));
+  } finally {
+    bitmap.close?.();
+  }
 }
 
 function getExtensionAssetUrl(path) {
@@ -2044,13 +2089,13 @@ function getOcrWorker() {
 }
 
 async function recognizeScreenshot(file) {
+  let nativeItems = [];
   if ('TextDetector' in globalThis) {
     let bitmap;
     try {
       bitmap = await createImageBitmap(file);
       const detections = await new TextDetector().detect(bitmap);
-      const lines = extractTextLines(detections);
-      if (lines.length) return lines;
+      nativeItems = canonicalizeKnownOcrItems(extractTextItems(detections));
     } catch {
       // Fall through to the bundled OCR engine when the experimental API fails.
     } finally {
@@ -2058,43 +2103,48 @@ async function recognizeScreenshot(file) {
     }
   }
 
-  const worker = await getOcrWorker();
-  const result = await worker.recognize(file);
-  return (result.data?.text || '')
-    .split(/\r?\n/)
-    .map(line => line.trim())
-    .filter(Boolean);
+  try {
+    const worker = await getOcrWorker();
+    const enhancedImage = await enhanceScreenshotForOcr(file);
+    const result = await worker.recognize(
+      enhancedImage,
+      {},
+      { blocks: true, text: true, hocr: false, tsv: true },
+    );
+    const items = extractTesseractItems(result.data?.tsv || '');
+    const fallbackItems = (result.data?.text || '')
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(Boolean)
+      .map((text, index) => ({ text, x: 0, y: index * 24, width: 0, height: 20, confidence: 0.5 }));
+    const tesseractItems = canonicalizeKnownOcrItems(items.length ? items : fallbackItems);
+    return Core.pairOcrUsageRows(tesseractItems).length >= Core.pairOcrUsageRows(nativeItems).length
+      ? tesseractItems
+      : nativeItems;
+  } catch (error) {
+    if (Core.pairOcrUsageRows(nativeItems).length) return nativeItems;
+    throw error;
+  }
 }
 
-function parseDetectedUsage(lines) {
+function parseDetectedUsage(items) {
   const usage = emptyUsage();
-  const rows = [];
-  let currentRow = null;
-
-  lines.forEach(line => {
-    const app = inferOcrApp(line);
-    if (app) {
-      if (currentRow) rows.push(currentRow);
-      currentRow = { ...app, lines: [line] };
-      return;
-    }
-    if (currentRow && currentRow.lines.length < 5) currentRow.lines.push(line);
+  const matches = Core.pairOcrUsageRows(canonicalizeKnownOcrItems(items)).map(match => {
+    const recognizedApp = inferOcrApp(match.name);
+    const category = recognizedApp?.category || inferCategory(match.name) || '';
+    return {
+      key: recognizedApp?.key || `unknown:${match.key}`,
+      name: recognizedApp?.name || match.name,
+      category,
+      recognized: Boolean(recognizedApp),
+      minutes: match.minutes,
+      confidence: match.confidence,
+      needsMinutes: false,
+      needsCategory: !CATEGORIES.includes(category),
+    };
   });
-  if (currentRow) rows.push(currentRow);
-
-  const bestByApp = new Map();
-  rows.forEach(row => {
-    const duration = extractPrimaryScreenTime(row.lines);
-    if (!duration) return;
-    const existing = bestByApp.get(row.key);
-    if (!existing || duration.confidence > existing.confidence) {
-      bestByApp.set(row.key, { ...row, ...duration });
-    }
-  });
-
-  const matches = [...bestByApp.values()];
   matches.forEach(match => {
-    usage[match.category] += match.minutes;
+    if (CATEGORIES.includes(match.category)) usage[match.category] += match.minutes;
   });
   return { usage, matches };
 }
@@ -2122,7 +2172,7 @@ function renderExtractionReview() {
   }
 
   elements.ocrMatches.innerHTML = items.map((item, index) => `
-    <div class="ocr-review-row" data-extraction-index="${index}">
+    <div class="ocr-review-row ${!item.category || (!item.minutes && item.category !== 'ignore') ? 'needs-review' : ''}" data-extraction-index="${index}">
       <label>
         <span>App</span>
         <input data-field="app" type="text" value="${escapeHtml(item.app)}" />
@@ -2130,18 +2180,26 @@ function renderExtractionReview() {
       <label>
         <span>Category</span>
         <select data-field="category">
+          <option value="" ${!item.category ? 'selected' : ''}>Choose category</option>
           ${CATEGORIES.map(category => `
             <option value="${category}" ${item.category === category ? 'selected' : ''}>
               ${CATEGORY_LABELS[category]}
             </option>
           `).join('')}
+          <option value="ignore" ${item.category === 'ignore' ? 'selected' : ''}>Ignore app</option>
         </select>
       </label>
       <label>
         <span>Minutes</span>
         <input data-field="minutes" type="number" min="0" max="1440" value="${item.minutes}" />
       </label>
-      <span class="ocr-row-confidence">${Math.round(item.confidence * 100)}% confidence</span>
+      <span class="ocr-row-confidence">${
+        !item.category
+          ? 'Choose what kind of app this is'
+          : !item.minutes && item.category !== 'ignore'
+            ? 'Enter the app usage in minutes'
+            : `${Math.round(item.confidence * 100)}% extraction confidence`
+      }</span>
     </div>
   `).join('');
   elements.ocrMatches.classList.remove('hidden');
@@ -2164,11 +2222,43 @@ function updateExtractionItem(event) {
     ? Math.max(0, Math.round(Number(event.target.value) || 0))
     : event.target.value;
   extractionState.reviewed = false;
+  const needsReview = !item.category || (item.category !== 'ignore' && !item.minutes);
+  row.classList.toggle('needs-review', needsReview);
+  const reviewMessage = row.querySelector('.ocr-row-confidence');
+  if (reviewMessage) {
+    reviewMessage.textContent = !item.category
+      ? 'Choose what kind of app this is'
+      : !item.minutes && item.category !== 'ignore'
+        ? 'Enter the app usage in minutes'
+        : `${Math.round(item.confidence * 100)}% extraction confidence`;
+  }
   elements.applyExtraction.textContent = 'Apply reviewed values';
 }
 
 function applyExtractedValues() {
   if (!extractionState.items.length) return;
+  const incomplete = extractionState.items.find(item => (
+    !item.category || (item.category !== 'ignore' && (!item.minutes || item.minutes <= 0))
+  ));
+  if (incomplete) {
+    setOcrStatus(
+      `Review ${incomplete.app}: choose a category and enter its screen time, or select Ignore app.`,
+      'error',
+    );
+    renderExtractionReview();
+    const row = elements.ocrMatches.querySelector(
+      `[data-extraction-index="${extractionState.items.indexOf(incomplete)}"]`,
+    );
+    row?.querySelector(!incomplete.category ? '[data-field="category"]' : '[data-field="minutes"]')?.focus();
+    return;
+  }
+  const includedItems = extractionState.items.filter(item => (
+    CATEGORIES.includes(item.category) && item.minutes > 0
+  ));
+  if (!includedItems.length) {
+    setOcrStatus('Choose a category and enter minutes for at least one app before applying.', 'error');
+    return;
+  }
   const usage = emptyUsage();
   extractionState.items.forEach(item => {
     if (CATEGORIES.includes(item.category)) usage[item.category] += Math.max(0, Number(item.minutes) || 0);
@@ -2207,8 +2297,8 @@ async function processScreenshot(file) {
   setOcrStatus('Processing the screenshot locally...', 'processing');
 
   try {
-    const lines = await recognizeScreenshot(file);
-    const { matches } = parseDetectedUsage(lines);
+    const ocrItems = await recognizeScreenshot(file);
+    const { matches } = parseDetectedUsage(ocrItems);
 
     if (!matches.length) {
       extractionState = {
@@ -2224,9 +2314,11 @@ async function processScreenshot(file) {
 
     const items = matches.slice(0, 20).map(match => ({
       app: match.name,
-      category: match.category,
+      category: match.category || '',
       minutes: match.minutes,
-      confidence: match.confidence >= 2 ? 0.9 : 0.58,
+      confidence: Math.max(0.35, Math.min(0.96,
+        match.confidence + (match.recognized ? 0.08 : 0),
+      )),
     }));
     extractionState = {
       status: 'ready',
@@ -2236,9 +2328,12 @@ async function processScreenshot(file) {
       error: '',
     };
     renderExtractionReview();
+    const needsCategory = items.filter(item => !item.category).length;
     setOcrStatus(
-      `Detected ${matches.length} apps. Review the app, category, and minutes before applying them.`,
-      'success',
+      needsCategory
+        ? `Detected ${matches.length} apps with usage times. Choose a category for ${needsCategory} unknown app${needsCategory === 1 ? '' : 's'}.`
+        : `Detected ${matches.length} apps and filled their usage times automatically. Review before applying.`,
+      needsCategory ? 'warning' : 'success',
     );
   } catch (error) {
     console.error('Screenshot OCR failed:', error);

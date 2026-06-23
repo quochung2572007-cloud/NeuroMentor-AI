@@ -58,7 +58,16 @@ class ScoringTests(unittest.TestCase):
     def test_prediction_matches_api_response_contract(self) -> None:
         prediction = predict_cognitive_state(**FIXTURES[0]["context"])
         response = CognitivePredictionResponse.model_validate(prediction.to_dict())
-        self.assertEqual(response.focus_score, 33)
+        self.assertEqual(response.focus_score, 47)
+
+    def test_focus_changes_with_category_mix_and_screen_load(self) -> None:
+        social = calculate_scores({"social": 120})["focus_score"]
+        games = calculate_scores({"games": 120})["focus_score"]
+        entertainment = calculate_scores({"entertainment": 120})["focus_score"]
+        long_gaming = calculate_scores({"games": 600})["focus_score"]
+        self.assertEqual([social, games, entertainment], [39, 31, 37])
+        self.assertEqual(len({social, games, entertainment}), 3)
+        self.assertLess(long_gaming, games)
 
     def test_usage_schema_rejects_more_than_one_day(self) -> None:
         with self.assertRaises(ValidationError):
@@ -109,9 +118,9 @@ class MentorTests(unittest.TestCase):
         response = build_mentor_response(
             "Why did my focus change?",
             self.result,
-            [{"date": "2026-06-19", "focus_score": 45, "fatigue_score": 20}],
+            [{"date": "2026-06-19", "focus_score": 60, "fatigue_score": 20}],
         )
-        self.assertIn("12 points lower", response["answer"])
+        self.assertIn("13 points lower", response["answer"])
 
     def test_mentor_response_matches_api_contract(self) -> None:
         response = MentorResponse.model_validate(
@@ -138,6 +147,24 @@ class MentorTests(unittest.TestCase):
         response = build_mentor_response("Toi nen lam gi ngay mai?", self.result)
         self.assertEqual(response["language"], "vi")
         self.assertIn("Kế hoạch", response["answer"])
+
+    def test_basic_conversation_does_not_repeat_default_report(self) -> None:
+        acknowledgement = build_mentor_response("oke", self.result)
+        self.assertEqual(mentor_intent("oke"), "acknowledge")
+        self.assertEqual(acknowledgement["language"], "vi")
+        self.assertEqual(acknowledgement["evidence"], [])
+        self.assertEqual(acknowledgement["next_steps"], [])
+        self.assertNotIn("ước tính tập trung", acknowledgement["answer"].lower())
+
+        reduction = build_mentor_response(
+            "Tôi có nên giảm bớt thời gian sử dụng không?", self.result
+        )
+        self.assertEqual(
+            mentor_intent("Tôi có nên giảm bớt thời gian sử dụng không?"),
+            "screen_time",
+        )
+        self.assertRegex(reduction["answer"], r"giảm khoảng|không cần cắt giảm mạnh")
+        self.assertNotIn("Mình chưa hiểu rõ", reduction["answer"])
 
 
 if __name__ == "__main__":

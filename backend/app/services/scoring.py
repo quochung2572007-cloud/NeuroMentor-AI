@@ -215,6 +215,8 @@ def calculate_scores(
     productive_ratio = productive_minutes / total if total else 0
     leisure_ratio = leisure_minutes / total if total else 0
     social_ratio = normalized["social"] / total if total else 0
+    games_ratio = normalized["games"] / total if total else 0
+    entertainment_ratio = normalized["entertainment"] / total if total else 0
     recovery_ratio = normalized["health"] / total if total else 0
     deep_work_ratio = deep_work_minutes / total if total else 0
     late_night_ratio = late_night_minutes / total if total else 0
@@ -225,10 +227,14 @@ def calculate_scores(
 
     focus_score = _round(
         _clamp(
-            42
-            + productive_ratio * 42
-            + min(deep_work_minutes, 120) * 0.22
-            - leisure_ratio * 27
+            58
+            + productive_ratio * 34
+            + min(deep_work_minutes, 120) * 0.18
+            + recovery_ratio * 8
+            - social_ratio * 16
+            - games_ratio * 24
+            - entertainment_ratio * 18
+            - min((total / 60) * 1.4, 18)
             - max(app_switches - 20, 0) * 0.16
             - max(late_night_minutes - 20, 0) * 0.11
         )

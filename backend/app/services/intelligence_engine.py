@@ -53,7 +53,7 @@ class CognitiveResult:
     alerts: list[AlertResult]
     features: dict[str, float | int | str]
     primary_action: PrimaryAction
-    model_version: str = "shared-snapshot-v1"
+    model_version: str = "shared-snapshot-v2"
 
     def to_dict(self) -> dict:
         result = asdict(self)
@@ -125,6 +125,8 @@ def mentor_language(question: str) -> str:
     vietnamese_phrases = (
         "toi nen", "lam gi", "tai sao", "vi sao", "ngay mai", "cam thay",
         "tap trung", "met moi", "xao nhang", "kiet suc", "xu huong", "giup toi",
+        "ban co", "giam bot", "thoi gian su dung", "cam on", "xin chao",
+        "cang thang", "thu gian", "oke",
     )
     return "vi" if any(character in source for character in vietnamese_characters) or any(
         phrase in normalized for phrase in vietnamese_phrases
@@ -137,13 +139,29 @@ def mentor_intent(question: str) -> str:
     def contains(*terms: str) -> bool:
         return any(term in normalized for term in terms)
 
+    if normalized.rstrip(".! ") in {"ok", "oke", "okay", "u", "uh", "uhm", "um", "duoc", "hieu roi", "got it"}:
+        return "acknowledge"
+    if contains("thank you", "thanks", "cam on"):
+        return "thanks"
+    if contains("hello", "hi there", "good morning", "good evening", "xin chao", "chao ban"):
+        return "greeting"
+    if contains("what can you do", "how can you help", "ban lam duoc gi", "ban co the lam gi", "co the hoi gi"):
+        return "capabilities"
+    if contains(
+        "reduce screen time", "use my phone less", "use less", "cut down",
+        "too much screen time", "giam thoi gian", "giam bot thoi gian",
+        "giam screen time", "co nen giam", "dung dien thoai it",
+    ):
+        return "screen_time"
+    if contains("stress", "stressed", "relax", "sleep better", "cang thang", "thu gian", "ngu ngon", "nghi ngoi"):
+        return "wellbeing"
     if contains("plan tomorrow", "tomorrow plan", "plan my day", "tomorrow", "ke hoach ngay mai", "ngay mai"):
         return "plan"
     if contains("why", "change", "cause", "reason", "contributor", "tai sao", "vi sao", "thay doi", "nguyen nhan"):
         return "explain"
     if contains("how might i feel", "how will i feel", "how i feel", "feel today", "emotion", "cam thay", "tam trang"):
         return "feel"
-    if contains("what should i do", "what can i do", "next step", "recommend", "help me", "toi nen lam gi", "nen lam gi", "loi khuyen", "giup toi"):
+    if contains("what should i do", "what can i do", "next step", "recommend", "help me", "toi nen lam gi", "nen lam gi", "loi khuyen", "giup toi", "toi co nen", "co nen"):
         return "action"
     if contains("trend", "week", "history", "improving", "baseline", "xu huong", "tuan", "lich su"):
         return "trend"
@@ -212,6 +230,33 @@ def build_mentor_response(
     category_share = result.usage.get(result.top_category, 0) / max(result.total_minutes, 1)
     trend = _history_sentence(result, history)
 
+    basic_answers = {
+        "vi": {
+            "acknowledge": "Ừ, mình hiểu rồi. Bạn cứ hỏi tiếp điều bạn muốn biết về screen time hoặc kế hoạch ngày mai nhé.",
+            "thanks": "Không có gì. Mình ở đây nếu bạn muốn xem lại dữ liệu hoặc chọn một bước nhỏ cho ngày mai.",
+            "greeting": "Chào bạn. Mình có thể giúp giải thích điểm số, xem yếu tố ảnh hưởng, điều chỉnh screen time hoặc lập kế hoạch cho ngày mai.",
+            "capabilities": "Bạn có thể hỏi mình: vì sao điểm tập trung thay đổi, có nên giảm screen time không, nhóm app nào ảnh hưởng nhiều nhất, xu hướng tuần này, hoặc nên làm gì ngày mai.",
+        },
+        "en": {
+            "acknowledge": "Got it. Ask me anything else about your screen time or tomorrow's plan.",
+            "thanks": "You're welcome. I can help review the data or choose one small next step whenever you want.",
+            "greeting": "Hello. I can explain your scores, identify the strongest contributor, help adjust screen time, or plan tomorrow.",
+            "capabilities": "You can ask why focus changed, whether to reduce screen time, which app category mattered most, what the week shows, or what to do tomorrow.",
+        },
+    }
+    if intent in basic_answers[language]:
+        return {
+            "language": language,
+            "answer": basic_answers[language][intent],
+            "evidence": [],
+            "next_steps": [],
+            "disclaimer": (
+                "Dữ liệu thời gian màn hình không thể chẩn đoán tình trạng y khoa hoặc sức khỏe tinh thần."
+                if language == "vi"
+                else "Screen-time metadata cannot diagnose medical or mental-health conditions."
+            ),
+        }
+
     if language == "vi":
         category_vi = VI_CATEGORY_LABELS.get(result.top_category, "Danh mục chính")
         evidence_vi = f"{category_vi} chiếm {category_share:.0%} thời gian màn hình đã ghi nhận."
@@ -221,6 +266,29 @@ def build_mentor_response(
             answer = (
                 "Mình chưa có ảnh chụp dữ liệu hợp lệ để trả lời dựa trên thông tin của bạn. "
                 "Hãy kiểm tra và lưu tổng thời gian hôm nay trước."
+            )
+        elif intent == "screen_time":
+            reducible_categories = ("social", "games", "entertainment")
+            reducible_category = max(reducible_categories, key=lambda item: result.usage[item])
+            reducible_minutes = result.usage[reducible_category]
+            reduction = min(30, max(10, round((reducible_minutes * 0.15) / 5) * 5))
+            if reducible_minutes >= 30:
+                answer = (
+                    f"Có, nhưng bạn không cần giảm tất cả. Hãy thử giảm khoảng {reduction} phút "
+                    f"ở nhóm {VI_CATEGORY_LABELS[reducible_category]} đang chiếm nhiều thời gian nhất, "
+                    "rồi giữ nguyên thời gian học hoặc công việc cần thiết. Sau vài ngày, hãy xem điểm "
+                    "và cảm nhận của bạn có thay đổi không."
+                )
+            else:
+                answer = (
+                    "Dữ liệu hiện chưa cho thấy cần cắt giảm mạnh. Hãy ưu tiên dùng màn hình có "
+                    "chủ đích, nghỉ ngắn giữa các phiên và giữ một giờ dừng ổn định."
+                )
+        elif intent == "wellbeing":
+            answer = (
+                "Dữ liệu màn hình không thể đo mức căng thẳng của bạn. Để ngày mai nhẹ hơn, "
+                f"{action_vi.lower()} Thêm một khoảng nghỉ không màn hình 5-10 phút và dừng thiết bị "
+                "sớm hơn trước khi ngủ nếu có thể."
             )
         elif intent == "feel":
             answer = (
@@ -248,8 +316,8 @@ def build_mentor_response(
             )
         else:
             answer = (
-                "Mình có thể giải thích điểm số hôm nay, yếu tố ảnh hưởng mạnh nhất hoặc lập một "
-                f"kế hoạch nhỏ cho ngày mai. {evidence_vi}"
+                "Mình chưa hiểu rõ câu hỏi đó. Bạn có thể nói cụ thể hơn, ví dụ: 'Tôi có nên giảm "
+                "screen time không?', 'Vì sao điểm tập trung thay đổi?' hoặc 'Lập kế hoạch cho ngày mai'."
             )
         return {
             "language": "vi",
@@ -266,6 +334,27 @@ def build_mentor_response(
         answer = (
             "I do not have a complete saved snapshot to reason from yet. Review today's category "
             "totals and save them, then I can explain the strongest pattern without guessing."
+        )
+    elif intent == "screen_time":
+        reducible_categories = ("social", "games", "entertainment")
+        reducible_category = max(reducible_categories, key=lambda item: result.usage[item])
+        reducible_minutes = result.usage[reducible_category]
+        reduction = min(30, max(10, round((reducible_minutes * 0.15) / 5) * 5))
+        if reducible_minutes >= 30:
+            answer = (
+                f"You do not need to cut all screen time. Try reducing "
+                f"{CATEGORY_LABELS[reducible_category].lower()} by about {reduction} minutes while "
+                "keeping necessary work or learning time. Review the change after a few days."
+            )
+        else:
+            answer = (
+                "The current data does not suggest a large cut. Use screens intentionally, take "
+                "short breaks, and keep a consistent stopping time."
+            )
+    elif intent == "wellbeing":
+        answer = (
+            f"Screen-time data cannot measure stress. To make tomorrow feel lighter, {action} "
+            "Add a 5-10 minute screen-free break and stop using devices earlier before sleep if practical."
         )
     elif intent == "feel":
         answer = (
@@ -296,8 +385,8 @@ def build_mentor_response(
         )
     else:
         answer = (
-            "I can help explain today's estimate, identify the strongest contributor, or make a "
-            f"small plan for tomorrow. For the latest snapshot, {result.insights[0].lower()}"
+            "I did not fully understand that question. Try asking whether to reduce screen time, "
+            "why focus changed, what affected today's score, or how to plan tomorrow."
         )
 
     return {
