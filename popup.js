@@ -1152,8 +1152,12 @@ async function handleAuthentication(mode) {
     elements.loginForm.reset();
     elements.signupForm.reset();
   } catch (error) {
-    const message = error.name === 'AbortError' || error instanceof TypeError
-      ? 'Cannot reach the account server. Start the backend or continue offline.'
+    const connectionFailed = error.name === 'AbortError' || error instanceof TypeError;
+    const localHost = ['localhost', '127.0.0.1'].includes(window.location.hostname);
+    const message = connectionFailed
+      ? localHost
+        ? 'Cannot reach the local account server. Start the backend or continue offline.'
+        : 'The account service is not deployed or is temporarily unavailable. Continue offline or try again later.'
       : error.message;
     setAuthStatus(message, 'error');
   } finally {

@@ -109,10 +109,10 @@ The checked-in `.gitignore` excludes the local database and `backend/.env`.
 ### 3. Deploy Vercel
 
 1. Import the same GitHub repository at <https://vercel.com/new>.
-2. Set the project name to `neurommentor-ai-khaivan2210`.
+2. Set the project name to `neuro-mentor-ai`.
 3. Select **Other** as the framework preset and leave the root directory as the repository root.
 4. Deploy without a build command; `vercel.json` serves the static app.
-5. Open `https://neurommentor-ai-khaivan2210.vercel.app`.
+5. Open `https://neuro-mentor-ai.vercel.app`.
 
 If either generated hostname changes, update `config.js`, `render.yaml`, and the Render
 `APP_PUBLIC_URL` / `CORS_ALLOWED_ORIGINS` values, then redeploy.

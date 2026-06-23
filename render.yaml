@@ -24,11 +24,11 @@ services:
       - key: JWT_EXPIRE_MINUTES
         value: "10080"
       - key: APP_PUBLIC_URL
-        value: https://neurommentor-ai-khaivan2210.vercel.app/
+        value: https://neuro-mentor-ai.vercel.app/
       - key: CORS_ALLOWED_ORIGINS
-        value: https://neurommentor-ai-khaivan2210.vercel.app
+        value: https://neuro-mentor-ai.vercel.app
       - key: CORS_ORIGIN_REGEX
-        value: ^https://neurommentor-ai-khaivan2210(?:-[a-z0-9-]+)?\.vercel\.app$
+        value: ^https://neuro-mentor-ai(?:-[a-z0-9-]+)?\.vercel\.app$
       - key: EMAIL_REMINDER_SCHEDULER_ENABLED
         value: "false"
       - key: EMAIL_REMINDER_POLL_SECONDS
@@ -68,4 +68,4 @@ envVarGroups:
       - key: EMAIL_FROM
         sync: false
       - key: APP_PUBLIC_URL
-        value: https://neurommentor-ai-khaivan2210.vercel.app/
+        value: https://neuro-mentor-ai.vercel.app/
