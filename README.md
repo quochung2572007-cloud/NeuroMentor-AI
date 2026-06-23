@@ -20,9 +20,9 @@ is available, they use the shared API for accounts, prediction, mentor responses
 - First-run login and sign-up experience with persistent JWT sessions
 - Account panel, logout, offline guest mode, and authenticated daily usage sync
 - Manual category entry for Screen Time and Digital Wellbeing totals
-- Screenshot upload and clipboard paste workflow
+- Screenshot upload, drag-and-drop, clipboard paste, editable extraction review, replace, and remove workflow
 - Configurable daily email when today's Screen Time has not been added
-- Bundled local Tesseract OCR for screenshot auto-fill, with no image upload
+- Bundled local Tesseract OCR with confidence indicators and required review before values are saved
 - Explainable focus, fatigue, distraction, and burnout tendency scores
 - Behavioral alerts for social overload, attention fragmentation, late-night use, and overload
 - Seven-day local trend chart
@@ -132,9 +132,9 @@ backend is not running. For login, signup, and cloud sync, also start the backen
 
 ## Use Without The Backend
 
-Choose **Continue offline** on the welcome screen. No setup is required. The app calculates
-scores locally and stores the latest context, prediction, trend history, and mentor conversation in
-browser storage.
+Choose **Continue offline** on the welcome screen. No setup is required. The app calculates scores
+locally and stores versioned daily snapshots plus the mentor conversation in browser storage.
+Overview, Analyze, Trends, and Mentor all read the same snapshot model.
 
 The **Local** indicator in the header confirms this mode.
 
@@ -236,6 +236,7 @@ Chrome Extension
   |-- Account login, signup, and offline guest mode
   |-- Authenticated device and daily usage sync
   |-- Local analysis fallback
+  |-- Versioned daily snapshots shared by every screen
   |-- Local history and mentor memory
   |-- Screenshot import
   |
@@ -247,7 +248,7 @@ Responsive Web App
   +-- Vercel static hosting
   |
   +-- Render FastAPI /v1
-        |-- Hybrid rules engine
+        |-- Pure shared scoring rules with browser parity fixtures
         |-- Explainable alerts
         |-- Mentor response builder
         |-- Authenticated reminder settings
@@ -265,18 +266,41 @@ the user explicitly selects or pastes are processed locally in the extension and
 
 Scores are behavioral wellness estimates, not medical or mental-health diagnoses.
 
+## Verification
+
+Install development-only checks, then run linting, type checking, and tests:
+
+```powershell
+cd backend
+pip install -r requirements-dev.txt
+python -m ruff check app tests
+python -m mypy app/services/scoring.py app/services/intelligence_engine.py app/schemas/intelligence.py app/schemas/usage.py tests/test_scoring.py
+python -m unittest discover -s tests -v
+```
+
+The frontend is static and has no compile step. Serve the repository root as described above. Browser
+tests live in `tests/core.browser.test.html`; shared score fixtures live in
+`tests/fixtures/scoring_cases.json` and are also exercised by the backend tests.
+
+Backend configuration is documented in `backend/.env.example`. Local-only mode needs no environment
+variables. Accounts need `DATABASE_URL` and a non-default `JWT_SECRET`; production email delivery
+needs `RESEND_API_KEY`, `EMAIL_FROM`, and `APP_PUBLIC_URL`. Production deployments should also set
+`CORS_ALLOWED_ORIGINS` and disable `AUTO_CREATE_TABLES` after migrations are configured.
+
 ## Main Files
 
 - `index.html` - Multi-view NeuroMentor web and extension interface
 - `popup.html` - Compatibility redirect to the main app
 - `popup.css` - Popup layout and visual system
 - `popup.js` - Local intelligence, trends, mentor, storage, and API fallback
+- `core.js` - Versioned snapshots, pure calculations, validation, trends, and deterministic Mentor logic
 - `runtime.js` - Web/extension runtime detection
 - `config.js` - Local and production API routing
 - `vercel.json` - Vercel static hosting and security headers
 - `render.yaml` - Render API, cron job, and PostgreSQL Blueprint
 - `assets/neurommentor-logo.png` - Full-resolution transparent NeuroMentor brand mark
 - `site.webmanifest` - Installable web-app metadata and logo icons
-- `backend/app/services/intelligence_engine.py` - Shared backend cognitive scoring engine
+- `backend/app/services/scoring.py` - Pure backend scoring and validation functions
+- `backend/app/services/intelligence_engine.py` - API and Mentor adapters around the pure scorer
 - `backend/app/routers/intelligence.py` - Prediction and mentor endpoints
 - `backend/app/services/report_engine.py` - Adapter for persisted daily reports

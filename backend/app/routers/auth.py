@@ -5,7 +5,13 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.deps import create_access_token, get_current_user, hash_password, verify_password
 from app.models import EmailReminderPreference, User, UserProfile
-from app.schemas.auth import LoginRequest, RegisterRequest, TokenResponse, UserResponse
+from app.schemas.auth import (
+    ChangePasswordRequest,
+    LoginRequest,
+    RegisterRequest,
+    TokenResponse,
+    UserResponse,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -44,3 +50,14 @@ def login(body: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse:
 @router.get("/me", response_model=UserResponse)
 def me(user: User = Depends(get_current_user)) -> User:
     return user
+
+
+@router.patch("/password", status_code=status.HTTP_204_NO_CONTENT)
+def change_password(body: ChangePasswordRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if not verify_password(body.current_password, user.password_hash):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")
+
+    user.password_hash = hash_password(body.new_password)
+    db.add(user)
+    db.commit()
+    return None

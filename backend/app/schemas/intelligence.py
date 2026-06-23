@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.schemas.usage import UsagePayload
 
@@ -9,6 +9,18 @@ class CognitiveContext(BaseModel):
     late_night_minutes: int = Field(default=0, ge=0, le=1440)
     deep_work_minutes: int = Field(default=0, ge=0, le=1440)
     launch_count: int = Field(default=0, ge=0, le=10000)
+    reported_total_minutes: int | None = Field(default=None, ge=0, le=1440)
+
+    @model_validator(mode="after")
+    def validate_reported_total(self) -> "CognitiveContext":
+        if self.reported_total_minutes is not None:
+            category_total = sum(self.usage.model_dump().values())
+            if category_total != self.reported_total_minutes:
+                raise ValueError(
+                    f"Category totals add up to {category_total} minutes, but the reported total is "
+                    f"{self.reported_total_minutes} minutes."
+                )
+        return self
 
 
 class AlertResponse(BaseModel):
@@ -43,9 +55,16 @@ class CognitivePredictionResponse(BaseModel):
     model_version: str
 
 
+class MentorHistoryEntry(BaseModel):
+    date: str
+    focus_score: int = Field(ge=0, le=100)
+    fatigue_score: int = Field(ge=0, le=100)
+
+
 class MentorRequest(BaseModel):
     question: str = Field(min_length=2, max_length=1000)
     context: CognitiveContext
+    recent_history: list[MentorHistoryEntry] = Field(default_factory=list, max_length=7)
 
 
 class MentorResponse(BaseModel):

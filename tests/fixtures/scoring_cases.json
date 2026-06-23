@@ -1,0 +1,52 @@
+[
+  {
+    "name": "mixed high-switching day",
+    "context": {
+      "usage": {
+        "social": 120,
+        "productivity": 45,
+        "games": 0,
+        "learning": 30,
+        "health": 15,
+        "entertainment": 60
+      },
+      "app_switches": 52,
+      "late_night_minutes": 35,
+      "deep_work_minutes": 20,
+      "launch_count": 80
+    },
+    "expected": {
+      "focus_score": 33,
+      "fatigue_score": 23,
+      "distraction_score": 55,
+      "burnout_score": 25,
+      "confidence_percent": 82,
+      "total_minutes": 270
+    }
+  },
+  {
+    "name": "productive balanced day",
+    "context": {
+      "usage": {
+        "social": 20,
+        "productivity": 180,
+        "games": 15,
+        "learning": 75,
+        "health": 30,
+        "entertainment": 40
+      },
+      "app_switches": 18,
+      "late_night_minutes": 0,
+      "deep_work_minutes": 65,
+      "launch_count": 25
+    },
+    "expected": {
+      "focus_score": 80,
+      "fatigue_score": 19,
+      "distraction_score": 15,
+      "burnout_score": 10,
+      "confidence_percent": 77,
+      "total_minutes": 360
+    }
+  }
+]

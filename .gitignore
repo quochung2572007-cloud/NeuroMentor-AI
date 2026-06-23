@@ -10,3 +10,8 @@ backend/.pytest_cache/
 backend/.mypy_cache/
 backend/*.egg-info/
 
+# Local sharing bundles and accidental duplicate asset folders.
+NeuroMentor-ChatGPT-Upload-*.zip
+NeuroMentor-Source-Bundle-*.md
+icons - Copy/
+backend/icons - Copy/

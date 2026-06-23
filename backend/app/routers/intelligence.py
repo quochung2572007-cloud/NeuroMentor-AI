@@ -29,4 +29,8 @@ def predict(body: CognitiveContext) -> dict:
 @router.post("/chat", response_model=MentorResponse)
 def chat(body: MentorRequest) -> dict:
     result = _predict(body.context)
-    return build_mentor_response(body.question, result)
+    return build_mentor_response(
+        body.question,
+        result,
+        [entry.model_dump() for entry in body.recent_history],
+    )

@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>NeuroMentor core tests</title>
+</head>
+<body data-test-status="running">
+  <pre id="results">Running...</pre>
+  <script src="../core.js"></script>
+  <script>
+    (() => {
+      const output = [];
+      const assert = (condition, message) => {
+        if (!condition) throw new Error(message);
+      };
+      const test = (name, callback) => {
+        try {
+          callback();
+          output.push(`PASS ${name}`);
+        } catch (error) {
+          output.push(`FAIL ${name}: ${error.message}`);
+          document.body.dataset.testStatus = 'failed';
+        }
+      };
+      const context = {
+        usage: {
+          social: 120,
+          productivity: 45,
+          games: 0,
+          learning: 30,
+          health: 15,
+          entertainment: 60,
+        },
+        app_switches: 52,
+        late_night_minutes: 35,
+        deep_work_minutes: 20,
+        launch_count: 80,
+      };
+
+      test('shared scoring fixture', () => {
+        const result = NeuroMentorCore.calculatePrediction(context);
+        assert(result.focus_score === 33, `focus was ${result.focus_score}`);
+        assert(result.fatigue_score === 23, `fatigue was ${result.fatigue_score}`);
+        assert(result.total_minutes === 270, `total was ${result.total_minutes}`);
+      });
+      test('reported-total validation', () => {
+        const result = NeuroMentorCore.validateContext({
+          usage: { social: 60, entertainment: 30 },
+          reported_total_minutes: 120,
+        });
+        assert(!result.valid, 'mismatched total should be invalid');
+      });
+      test('missing trend days stay missing', () => {
+        const snapshot = NeuroMentorCore.createDailySnapshot({ date: '2026-06-20', context });
+        const trend = NeuroMentorCore.buildTrend([snapshot], '2026-06-20');
+        assert(trend.available_days === 1, `available days was ${trend.available_days}`);
+        assert(trend.slots.filter(slot => slot.missing).length === 6, 'expected six missing days');
+      });
+      test('same-day analysis replaces the trend value', () => {
+        const older = NeuroMentorCore.createDailySnapshot({
+          date: '2026-06-20',
+          context,
+          updatedAt: '2026-06-20T12:00:00.000Z',
+        });
+        const newer = NeuroMentorCore.createDailySnapshot({
+          date: '2026-06-20',
+          context: {
+            ...context,
+            usage: { ...context.usage, social: 20, productivity: 180 },
+          },
+          updatedAt: '2026-06-20T18:00:00.000Z',
+        });
+        const snapshots = NeuroMentorCore.upsertSnapshot([older], newer);
+        const today = NeuroMentorCore.buildTrend(snapshots, '2026-06-20').slots.at(-1);
+        assert(snapshots.length === 1, 'duplicate same-day snapshots remained');
+        assert(today.focus === newer.result.focus_score, 'trend retained the older focus score');
+        assert(today.fatigue === newer.result.fatigue_score, 'trend retained the older fatigue score');
+      });
+      test('Mentor responses are intent-specific and safe', () => {
+        const snapshot = NeuroMentorCore.createDailySnapshot({ date: '2026-06-20', context });
+        const responses = [
+          'How might I feel?',
+          'What should I do?',
+          'Why did my focus change?',
+          'Plan tomorrow',
+        ].map(question => NeuroMentorCore.buildMentorResponse(question, snapshot, [snapshot]));
+        assert(new Set(responses.map(response => response.intent)).size === 4, 'intents repeated');
+        assert(new Set(responses.map(response => response.answer)).size === 4, 'answers repeated');
+        assert(/cannot determine how you feel/i.test(responses[0].answer), 'feeling safety text missing');
+      });
+
+      if (document.body.dataset.testStatus !== 'failed') {
+        document.body.dataset.testStatus = 'passed';
+      }
+      document.getElementById('results').textContent = output.join('\n');
+    })();
+  </script>
+</body>
+</html>

@@ -8,9 +8,9 @@
   <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png" />
   <link rel="apple-touch-icon" sizes="192x192" href="assets/neurommentor-logo-192.png" />
   <link rel="manifest" href="site.webmanifest" />
-  <script src="runtime.js"></script>
-  <script src="config.js"></script>
-  <link rel="stylesheet" href="popup.css" />
+  <script src="runtime.js?v=20260620-shared-snapshot"></script>
+  <script src="config.js?v=20260620-shared-snapshot"></script>
+  <link rel="stylesheet" href="popup.css?v=20260621-same-day-snapshot" />
 </head>
 <body>
   <section id="auth-view" class="auth-view" aria-labelledby="auth-title">
@@ -122,7 +122,14 @@
           <span class="status-dot"></span>
           <span>Local</span>
         </div>
-        <button id="account-button" class="account-button" type="button" aria-label="Open account">
+        <button
+          id="account-button"
+          class="account-button"
+          type="button"
+          aria-label="Open settings"
+          aria-controls="account-panel"
+          aria-expanded="false"
+        >
           <span id="account-avatar">?</span>
         </button>
       </div>
@@ -135,15 +142,87 @@
       <button class="tab-button" type="button" data-screen-target="mentor">Mentor</button>
     </nav>
 
-    <section id="account-panel" class="account-panel hidden" aria-label="Account">
+    <div id="account-backdrop" class="account-backdrop hidden" aria-hidden="true"></div>
+    <section
+      id="account-panel"
+      class="account-panel hidden"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="settings-title"
+      tabindex="-1"
+    >
       <div class="account-heading">
         <div id="account-avatar-large" class="account-avatar-large">?</div>
         <div>
-          <p class="eyebrow">Your account</p>
+          <p id="settings-title" class="eyebrow">Settings</p>
           <strong id="account-email">Offline workspace</strong>
           <span id="account-member-since">Stored only on this device</span>
         </div>
         <button id="close-account" class="panel-close" type="button" aria-label="Close account panel">X</button>
+      </div>
+      <div class="settings-list" aria-label="Profile settings">
+        <div class="settings-row static-settings-row">
+          <span class="settings-icon" aria-hidden="true">ID</span>
+          <span class="settings-main">NeuroMentor ID</span>
+          <span id="account-user-id" class="settings-value">NM-LOCAL</span>
+          <span class="settings-static-label">Assigned</span>
+        </div>
+        <div class="settings-row static-settings-row">
+          <span class="settings-icon" aria-hidden="true">@</span>
+          <span class="settings-main">Email</span>
+          <span id="account-email-masked" class="settings-value">Not signed in</span>
+          <span class="settings-static-label">Account</span>
+        </div>
+        <button id="account-phone-row" class="settings-row" type="button" aria-expanded="false">
+          <span class="settings-icon" aria-hidden="true">PH</span>
+          <span class="settings-main">Phone Number</span>
+          <span id="account-phone-status" class="settings-value">Not set</span>
+          <span class="settings-arrow" aria-hidden="true">></span>
+        </button>
+        <div id="phone-editor" class="settings-editor hidden" aria-label="Set phone number">
+          <label>
+            <span>Phone number</span>
+            <input id="account-phone-input" type="tel" autocomplete="tel" placeholder="+1 555 123 4567" />
+          </label>
+          <div class="settings-editor-actions">
+            <button id="save-phone" type="button">Save phone</button>
+            <button id="cancel-phone" class="secondary-settings-button" type="button">Cancel</button>
+          </div>
+        </div>
+        <button id="account-password-row" class="settings-row" type="button" aria-expanded="false">
+          <span class="settings-icon" aria-hidden="true">PW</span>
+          <span class="settings-main">Password</span>
+          <span id="account-password-status" class="settings-value">Protected</span>
+          <span class="settings-arrow" aria-hidden="true">></span>
+        </button>
+        <div id="password-editor" class="settings-editor hidden" aria-label="Change password">
+          <label>
+            <span>Current password</span>
+            <input id="current-password" type="password" autocomplete="current-password" />
+          </label>
+          <label>
+            <span>New password</span>
+            <input id="new-password" type="password" autocomplete="new-password" minlength="8" />
+          </label>
+          <label>
+            <span>Confirm new password</span>
+            <input id="confirm-new-password" type="password" autocomplete="new-password" minlength="8" />
+          </label>
+          <p id="password-change-status" class="settings-status"></p>
+          <div class="settings-editor-actions">
+            <button id="save-password" type="button">Update password</button>
+            <button id="cancel-password" class="secondary-settings-button" type="button">Cancel</button>
+          </div>
+        </div>
+        <div class="settings-row theme-settings-row">
+          <span class="settings-icon" aria-hidden="true">TH</span>
+          <span class="settings-main">Theme</span>
+          <span id="theme-label" class="settings-value">Light</span>
+          <label class="toggle-control" aria-label="Use dark theme">
+            <input id="theme-toggle" type="checkbox" />
+            <span class="toggle-track" aria-hidden="true"></span>
+          </label>
+        </div>
       </div>
       <div class="account-sync">
         <span class="status-dot"></span>
@@ -165,8 +244,9 @@
         </div>
         <div class="reminder-time-row">
           <label for="reminder-time">Reminder time</label>
-          <input id="reminder-time" type="time" value="20:00" />
+          <select id="reminder-time" aria-describedby="reminder-time-help"></select>
         </div>
+        <p id="reminder-time-help" class="settings-help">Times are shown in your browser's locale.</p>
         <a
           id="reminder-setup"
           class="reminder-setup hidden"
@@ -263,6 +343,7 @@
                   <span>Confidence</span>
                   <strong id="focus-confidence">0%</strong>
                 </div>
+                <p id="focus-comparison" class="metric-comparison">No previous value yet.</p>
               </div>
             </details>
 
@@ -282,6 +363,7 @@
                   <span>Confidence</span>
                   <strong id="fatigue-confidence">0%</strong>
                 </div>
+                <p id="fatigue-comparison" class="metric-comparison">No previous value yet.</p>
               </div>
             </details>
 
@@ -301,6 +383,7 @@
                   <span>Confidence</span>
                   <strong id="distraction-confidence">0%</strong>
                 </div>
+                <p id="distraction-comparison" class="metric-comparison">No previous value yet.</p>
               </div>
             </details>
 
@@ -320,6 +403,7 @@
                   <span>Confidence</span>
                   <strong id="burnout-confidence">0%</strong>
                 </div>
+                <p id="burnout-comparison" class="metric-comparison">No previous value yet.</p>
               </div>
             </details>
           </div>
@@ -470,13 +554,13 @@
             </span>
             <span class="summary-action">Open</span>
           </summary>
-          <div class="import-body">
+          <div id="import-drop-zone" class="import-body" aria-describedby="ocr-status">
             <div class="import-actions">
               <label class="upload-button" for="screenshot-input">
                 <input id="screenshot-input" type="file" accept="image/*" hidden />
                 Choose image
               </label>
-              <div id="paste-zone" class="paste-zone" tabindex="0" role="region">
+              <div id="paste-zone" class="paste-zone" tabindex="0" role="button" aria-label="Paste a screenshot from the clipboard">
                 <kbd>Ctrl+V</kbd>
                 <span>Paste screenshot</span>
               </div>
@@ -484,8 +568,18 @@
             <p id="ocr-status" class="import-status">
               OCR runs locally when supported by this Chrome build. Always review detected values.
             </p>
-            <img id="screenshot-preview" class="screenshot-preview hidden" alt="Uploaded screen-time screenshot" />
+            <div id="screenshot-review" class="screenshot-review hidden">
+              <img id="screenshot-preview" class="screenshot-preview" alt="Uploaded screen-time screenshot" />
+              <div class="screenshot-controls">
+                <label for="screenshot-input" class="secondary-button">Replace image</label>
+                <button id="remove-screenshot" class="secondary-button" type="button">Remove image</button>
+              </div>
+            </div>
+            <div id="ocr-confidence" class="ocr-confidence hidden"></div>
             <div id="ocr-matches" class="ocr-matches hidden"></div>
+            <button id="apply-extraction" class="primary-button compact-button hidden" type="button">
+              Apply reviewed values
+            </button>
           </div>
         </details>
 
@@ -530,6 +624,18 @@
                 <input id="entertainment" name="entertainment" type="number" min="0" max="1440" value="0" />
               </label>
             </div>
+            <div class="total-validation-row">
+              <label>
+                <span>Reported total (optional)</span>
+                <small>Use the total shown by Screen Time or Digital Wellbeing.</small>
+                <input id="reported-total-minutes" type="number" min="0" max="1440" placeholder="e.g. 240" />
+              </label>
+              <div>
+                <span>Category total</span>
+                <strong id="category-total">0 minutes</strong>
+              </div>
+            </div>
+            <div id="validation-summary" class="validation-summary" aria-live="polite"></div>
           </article>
 
           <article class="content-card">
@@ -601,6 +707,9 @@
               Add today's snapshot
             </button>
           </div>
+          <p id="trend-coverage-note" class="trend-coverage-note hidden" role="status">
+            One day is recorded. Add another daily snapshot before interpreting this as a trend.
+          </p>
           <div id="trend-chart" class="trend-chart" aria-label="Seven-day focus score chart"></div>
           <div id="trend-chart-legend" class="chart-legend">
             <span><i class="legend-focus"></i>Focus</span>
@@ -663,6 +772,7 @@
         <div class="prompt-chips" aria-label="Suggested mentor questions">
           <button type="button" data-question="What most influenced my focus today?">What changed?</button>
           <button type="button" data-question="What is the smallest useful action I can take tomorrow?">Plan tomorrow</button>
+          <button type="button" data-question="How might I feel based on this pattern?">How might I feel?</button>
           <button type="button" data-question="How can I reduce mental fatigue without changing everything?">Protect energy</button>
         </div>
 
@@ -698,7 +808,8 @@
     </footer>
   </div>
 
-  <script src="vendor/tesseract/tesseract.min.js"></script>
-  <script src="popup.js"></script>
+  <script src="vendor/tesseract/tesseract.min.js?v=20260621-same-day-snapshot"></script>
+  <script src="core.js?v=20260621-same-day-snapshot"></script>
+  <script src="popup.js?v=20260621-same-day-snapshot"></script>
 </body>
 </html>

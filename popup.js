@@ -1,7 +1,14 @@
 const API_ROOT = globalThis.NEUROMENTOR_CONFIG?.apiRoot || 'http://localhost:8000/v1';
 const API_BASE = `${API_ROOT}/intelligence`;
 const APP_LOCALE = 'en-US';
+const Core = globalThis.NeuroMentorCore;
+
+if (!Core) {
+  throw new Error('NeuroMentor shared core failed to load.');
+}
+
 const STORAGE_KEYS = {
+  snapshots: 'neuroMentorDailySnapshots',
   context: 'neuroMentorContext',
   prediction: 'neuroMentorPrediction',
   snapshotDate: 'neuroMentorSnapshotDate',
@@ -13,6 +20,9 @@ const STORAGE_KEYS = {
   deviceId: 'neuroMentorDeviceId',
   devicePlatform: 'neuroMentorDevicePlatform',
   workspaceOwner: 'neuroMentorWorkspaceOwner',
+  localUserId: 'neuroMentorLocalUserId',
+  phoneNumber: 'neuroMentorPhoneNumber',
+  theme: 'neuroMentorTheme',
 };
 const DEFAULT_REMINDER = {
   enabled: false,
@@ -23,15 +33,8 @@ const DEFAULT_REMINDER = {
   lastSentAt: null,
 };
 
-const CATEGORIES = ['social', 'productivity', 'games', 'learning', 'health', 'entertainment'];
-const CATEGORY_LABELS = {
-  social: 'Social',
-  productivity: 'Productivity',
-  games: 'Games',
-  learning: 'Learning',
-  health: 'Health',
-  entertainment: 'Entertainment',
-};
+const CATEGORIES = [...Core.CATEGORIES];
+const CATEGORY_LABELS = Core.CATEGORY_LABELS;
 const CATEGORY_COLORS = {
   social: '#ef7959',
   productivity: '#397e70',
@@ -87,15 +90,35 @@ const elements = {
   offlineButton: document.getElementById('offline-button'),
   engineStatus: document.getElementById('engine-status'),
   accountButton: document.getElementById('account-button'),
+  accountBackdrop: document.getElementById('account-backdrop'),
   accountAvatar: document.getElementById('account-avatar'),
   accountPanel: document.getElementById('account-panel'),
   accountAvatarLarge: document.getElementById('account-avatar-large'),
   accountEmail: document.getElementById('account-email'),
   accountMemberSince: document.getElementById('account-member-since'),
+  accountUserId: document.getElementById('account-user-id'),
+  accountEmailMasked: document.getElementById('account-email-masked'),
+  accountPhoneStatus: document.getElementById('account-phone-status'),
+  accountPasswordStatus: document.getElementById('account-password-status'),
+  accountPhoneRow: document.getElementById('account-phone-row'),
+  accountPasswordRow: document.getElementById('account-password-row'),
+  phoneEditor: document.getElementById('phone-editor'),
+  phoneInput: document.getElementById('account-phone-input'),
+  savePhone: document.getElementById('save-phone'),
+  cancelPhone: document.getElementById('cancel-phone'),
+  passwordEditor: document.getElementById('password-editor'),
+  currentPassword: document.getElementById('current-password'),
+  newPassword: document.getElementById('new-password'),
+  confirmNewPassword: document.getElementById('confirm-new-password'),
+  passwordChangeStatus: document.getElementById('password-change-status'),
+  savePassword: document.getElementById('save-password'),
+  cancelPassword: document.getElementById('cancel-password'),
   accountSyncTitle: document.getElementById('account-sync-title'),
   accountSyncStatus: document.getElementById('account-sync-status'),
   accountAction: document.getElementById('account-action'),
   closeAccount: document.getElementById('close-account'),
+  themeToggle: document.getElementById('theme-toggle'),
+  themeLabel: document.getElementById('theme-label'),
   reminderEnabled: document.getElementById('reminder-enabled'),
   reminderTime: document.getElementById('reminder-time'),
   reminderStatus: document.getElementById('reminder-status'),
@@ -115,21 +138,25 @@ const elements = {
   focusExplanation: document.getElementById('focus-explanation'),
   focusContributors: document.getElementById('focus-contributors'),
   focusConfidence: document.getElementById('focus-confidence'),
+  focusComparison: document.getElementById('focus-comparison'),
   fatigueScore: document.getElementById('fatigue-score'),
   fatigueLabel: document.getElementById('fatigue-label'),
   fatigueExplanation: document.getElementById('fatigue-explanation'),
   fatigueContributors: document.getElementById('fatigue-contributors'),
   fatigueConfidence: document.getElementById('fatigue-confidence'),
+  fatigueComparison: document.getElementById('fatigue-comparison'),
   distractionScore: document.getElementById('distraction-score'),
   distractionLabel: document.getElementById('distraction-label'),
   distractionExplanation: document.getElementById('distraction-explanation'),
   distractionContributors: document.getElementById('distraction-contributors'),
   distractionConfidence: document.getElementById('distraction-confidence'),
+  distractionComparison: document.getElementById('distraction-comparison'),
   burnoutRisk: document.getElementById('burnout-risk'),
   burnoutScore: document.getElementById('burnout-score'),
   burnoutExplanation: document.getElementById('burnout-explanation'),
   burnoutContributors: document.getElementById('burnout-contributors'),
   burnoutConfidence: document.getElementById('burnout-confidence'),
+  burnoutComparison: document.getElementById('burnout-comparison'),
   productiveRatio: document.getElementById('productive-ratio'),
   forecastFocus: document.getElementById('forecast-focus'),
   forecastDelta: document.getElementById('forecast-delta'),
@@ -159,10 +186,18 @@ const elements = {
   analyzeButton: document.getElementById('analyze-button'),
   analysisStatus: document.getElementById('analysis-status'),
   screenshotInput: document.getElementById('screenshot-input'),
+  importDropZone: document.getElementById('import-drop-zone'),
+  screenshotReview: document.getElementById('screenshot-review'),
   screenshotPreview: document.getElementById('screenshot-preview'),
+  removeScreenshot: document.getElementById('remove-screenshot'),
+  applyExtraction: document.getElementById('apply-extraction'),
+  ocrConfidence: document.getElementById('ocr-confidence'),
   pasteZone: document.getElementById('paste-zone'),
   ocrStatus: document.getElementById('ocr-status'),
   ocrMatches: document.getElementById('ocr-matches'),
+  reportedTotal: document.getElementById('reported-total-minutes'),
+  categoryTotal: document.getElementById('category-total'),
+  validationSummary: document.getElementById('validation-summary'),
   trendChart: document.getElementById('trend-chart'),
   trendDirection: document.getElementById('trend-direction'),
   averageFocus: document.getElementById('average-focus'),
@@ -173,6 +208,7 @@ const elements = {
   trendRisk: document.getElementById('trend-risk'),
   trendNote: document.getElementById('trend-note'),
   trendEmptyState: document.getElementById('trend-empty-state'),
+  trendCoverageNote: document.getElementById('trend-coverage-note'),
   trendChartLegend: document.getElementById('trend-chart-legend'),
   chatLog: document.getElementById('chat-log'),
   mentorForm: document.getElementById('mentor-form'),
@@ -181,46 +217,111 @@ const elements = {
   mentorContextDetail: document.getElementById('mentor-context-detail'),
 };
 
-let currentContext = emptyContext();
-let currentPrediction = null;
+let currentSnapshot = Core.createDailySnapshot({ date: Core.localDateKey() });
+let snapshots = [];
+let currentContext = currentSnapshot.context;
+let currentPrediction = currentSnapshot.result;
 let history = [];
-let workspaceDate = localDateKey();
+let workspaceDate = Core.localDateKey();
 let chatHistory = [];
 let previewUrl = null;
 let ocrWorkerPromise = null;
+let extractionState = { status: 'idle', confidence: 0, reviewed: true, items: [], error: '' };
+let accountFocusReturn = null;
 let authToken = null;
 let currentUser = null;
 let appMode = 'signed-out';
 let accountDeviceId = null;
 let reminderSettings = { ...DEFAULT_REMINDER };
+let localUserId = null;
+let phoneNumber = '';
+let themePreference = 'light';
 
 function emptyUsage() {
   return Object.fromEntries(CATEGORIES.map(category => [category, 0]));
 }
 
 function emptyContext() {
-  return {
-    usage: emptyUsage(),
-    app_switches: 0,
-    late_night_minutes: 0,
-    deep_work_minutes: 0,
-    launch_count: 0,
-  };
+  return Core.normalizeContext({ usage: emptyUsage() });
 }
 
 function clamp(value, minimum = 0, maximum = 100) {
   return Math.round(Math.max(minimum, Math.min(maximum, value)));
 }
 
-function ratio(value, total) {
-  return value / Math.max(total, 1);
+function localDateKey(date = new Date()) {
+  return Core.localDateKey(date);
 }
 
-function localDateKey(date = new Date()) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+function snapshotHistoryEntry(snapshot) {
+  const normalized = Core.normalizeSnapshot(snapshot, snapshot?.date);
+  return {
+    date: normalized.date,
+    focus_score: normalized.result.focus_score,
+    fatigue_score: normalized.result.fatigue_score,
+    distraction_score: normalized.result.distraction_score,
+    burnout_score: normalized.result.burnout_score,
+    burnout_risk: normalized.result.burnout_risk,
+    productive_ratio: normalized.result.productive_ratio,
+    total_minutes: normalized.result.total_minutes,
+    context: normalized.context,
+    snapshot: normalized,
+  };
+}
+
+function refreshHistoryView() {
+  snapshots = Core.uniqueSnapshots(snapshots).slice(-30);
+  history = snapshots.map(snapshotHistoryEntry);
+}
+
+function reconcileCurrentSnapshot() {
+  if (!currentSnapshot?.date || !currentSnapshot.validation?.valid) return;
+  snapshots = Core.upsertSnapshot(snapshots, currentSnapshot).slice(-30);
+  refreshHistoryView();
+}
+
+function activateSnapshot(snapshot) {
+  currentSnapshot = Core.normalizeSnapshot(snapshot, workspaceDate);
+  currentContext = currentSnapshot.context;
+  currentPrediction = currentSnapshot.result;
+  extractionState = { ...currentSnapshot.extraction };
+}
+
+async function persistSnapshots() {
+  reconcileCurrentSnapshot();
+  refreshHistoryView();
+  await storageSet({ [STORAGE_KEYS.snapshots]: snapshots });
+}
+
+function applyExternalSnapshots(value) {
+  if (!Array.isArray(value)) return;
+  const incoming = Core.uniqueSnapshots(value).slice(-30);
+  const sameDay = incoming.find(snapshot => snapshot.date === workspaceDate);
+  snapshots = incoming;
+  refreshHistoryView();
+
+  if (sameDay && sameDay.updated_at >= (currentSnapshot?.updated_at || '')) {
+    activateSnapshot(sameDay);
+    populateContext(currentContext);
+  }
+  renderOverview(currentSnapshot);
+  renderTrends();
+}
+
+function bindSnapshotStorageSync() {
+  window.addEventListener('storage', event => {
+    if (event.key !== STORAGE_KEYS.snapshots || event.newValue === null) return;
+    try {
+      applyExternalSnapshots(JSON.parse(event.newValue));
+    } catch {
+      // Ignore malformed data from another tab and keep the active valid snapshot.
+    }
+  });
+
+  globalThis.chrome?.storage?.onChanged?.addListener((changes, areaName) => {
+    if (areaName !== 'local' || !changes[STORAGE_KEYS.snapshots]) return;
+    applyExternalSnapshots(changes[STORAGE_KEYS.snapshots].newValue);
+  });
 }
 
 function normalizeReminder(settings) {
@@ -244,7 +345,23 @@ function formatReminderTime(time) {
   const [hour, minute] = time.split(':').map(Number);
   const date = new Date();
   date.setHours(hour, minute, 0, 0);
-  return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  return new Intl.DateTimeFormat(APP_LOCALE, {
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(date);
+}
+
+function setupReminderTimeOptions() {
+  if (!elements.reminderTime || elements.reminderTime.options.length) return;
+  for (let minutes = 0; minutes < 24 * 60; minutes += 30) {
+    const hour = String(Math.floor(minutes / 60)).padStart(2, '0');
+    const minute = String(minutes % 60).padStart(2, '0');
+    const value = `${hour}:${minute}`;
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = formatReminderTime(value);
+    elements.reminderTime.appendChild(option);
+  }
 }
 
 function renderReminderSettings(message = '') {
@@ -399,17 +516,18 @@ function showNewDayStatus() {
 }
 
 async function startFreshWorkspaceDay(showStatus = true) {
-  currentContext = emptyContext();
-  currentPrediction = null;
+  activateSnapshot(Core.createDailySnapshot({ date: workspaceDate }));
   populateContext(currentContext);
-  renderOverview(null);
+  renderOverview(currentSnapshot);
 
   if (previewUrl) {
     URL.revokeObjectURL(previewUrl);
     previewUrl = null;
   }
   elements.screenshotPreview.removeAttribute('src');
-  elements.screenshotPreview.classList.add('hidden');
+  elements.screenshotReview?.classList.add('hidden');
+  elements.ocrConfidence?.classList.add('hidden');
+  elements.applyExtraction?.classList.add('hidden');
   elements.ocrMatches.innerHTML = '';
   elements.ocrMatches.classList.add('hidden');
   setOcrStatus('Upload or paste today\'s Screen Time screenshot.');
@@ -448,10 +566,22 @@ function requestedScreen() {
 }
 
 function setEngineStatus(source) {
+  const states = {
+    cloud: ['API', 'Analysis API connected'],
+    checking: ['Checking', 'Checking analysis API'],
+    offline: ['Offline', 'Offline; using the local model'],
+    unconfigured: ['Local', 'API unavailable or not configured; using the local model'],
+    error: ['Error', 'Analysis service error'],
+    local: ['Local', 'Using the local analysis model'],
+    'local-model': ['Local', 'Using the local analysis model'],
+  };
+  const [text, title] = states[source] || states.local;
   const cloud = source === 'cloud';
   elements.engineStatus?.classList.toggle('cloud', cloud);
+  elements.engineStatus?.setAttribute('data-state', source || 'local');
+  elements.engineStatus?.setAttribute('title', title);
   const label = elements.engineStatus?.querySelector('span:last-child');
-  if (label) label.textContent = cloud ? 'API' : 'Local';
+  if (label) label.textContent = text;
 }
 
 function setGreeting() {
@@ -467,13 +597,14 @@ function collectContext() {
     usage[category] = Math.max(0, Number(document.getElementById(category).value) || 0);
   });
 
-  return {
+  return Core.normalizeContext({
     usage,
     app_switches: Math.max(0, Number(document.getElementById('app-switches').value) || 0),
     late_night_minutes: Math.max(0, Number(document.getElementById('late-night-minutes').value) || 0),
     deep_work_minutes: Math.max(0, Number(document.getElementById('deep-work-minutes').value) || 0),
     launch_count: Math.max(0, Number(document.getElementById('launch-count').value) || 0),
-  };
+    reported_total_minutes: elements.reportedTotal?.value ?? null,
+  });
 }
 
 function populateContext(context) {
@@ -484,195 +615,40 @@ function populateContext(context) {
   document.getElementById('app-switches').value = safeContext.app_switches || 0;
   document.getElementById('late-night-minutes').value = safeContext.late_night_minutes || 0;
   document.getElementById('deep-work-minutes').value = safeContext.deep_work_minutes || 0;
-  document.getElementById('launch-count').value = safeContext.launch_count || 0;
+  document.getElementById('launch-count').value = safeContext.launch_count || safeContext.app_launches || 0;
+  if (elements.reportedTotal) {
+    elements.reportedTotal.value = safeContext.reported_total_minutes ?? '';
+  }
+  renderValidation(Core.validateContext(safeContext), false);
 }
 
-function buildAlert(alertType, severity, title, message, reason, action) {
-  return { alert_type: alertType, severity, title, message, reason, action };
+function renderValidation(validation = Core.validateContext(collectContext()), announce = true) {
+  if (elements.categoryTotal) {
+    elements.categoryTotal.textContent = formatMinutes(validation.category_total_minutes);
+  }
+  if (!elements.validationSummary) return validation;
+
+  if (!announce && validation.category_total_minutes === 0) {
+    elements.validationSummary.innerHTML = '';
+    elements.validationSummary.className = 'validation-summary';
+    return validation;
+  }
+
+  const messages = [...validation.errors, ...validation.warnings];
+  elements.validationSummary.innerHTML = messages
+    .map(message => `<p>${escapeHtml(message)}</p>`)
+    .join('');
+  elements.validationSummary.className = `validation-summary ${
+    validation.errors.length ? 'error' : validation.warnings.length ? 'warning' : 'valid'
+  }`;
+  if (announce && validation.valid && validation.category_total_minutes > 0) {
+    elements.validationSummary.innerHTML = '<p>Category totals are consistent and ready to save.</p>';
+  }
+  return validation;
 }
 
 function predictLocally(context) {
-  const usage = Object.fromEntries(
-    CATEGORIES.map(category => [category, Math.max(0, Number(context.usage[category]) || 0)]),
-  );
-  const totalMinutes = Object.values(usage).reduce((sum, minutes) => sum + minutes, 0);
-  const productiveMinutes = usage.productivity + usage.learning;
-  const productiveRatio = ratio(productiveMinutes, totalMinutes);
-  const socialRatio = ratio(usage.social, totalMinutes);
-  const entertainmentRatio = ratio(usage.games + usage.entertainment, totalMinutes);
-  const recoveryRatio = ratio(usage.health, totalMinutes);
-  const deepWorkRatio = ratio(context.deep_work_minutes, totalMinutes);
-  const lateNightRatio = ratio(context.late_night_minutes, totalMinutes);
-  const usageHours = Math.max(totalMinutes / 60, 1);
-  const switchRate = context.app_switches / usageHours;
-  const launchRate = context.launch_count / usageHours;
-
-  const switchPenalty = Math.min(28, switchRate * 1.7);
-  const launchPenalty = Math.min(12, launchRate * 0.35);
-  const latePenalty = Math.min(24, lateNightRatio * 45);
-  const overloadPenalty = Math.min(22, Math.max(0, totalMinutes - 240) / 12);
-
-  let focusScore = clamp(
-    42
-    + productiveRatio * 48
-    + deepWorkRatio * 24
-    + recoveryRatio * 10
-    - socialRatio * 20
-    - entertainmentRatio * 16
-    - switchPenalty
-    - latePenalty,
-  );
-  let fatigueScore = clamp(
-    12
-    + overloadPenalty * 2.1
-    + lateNightRatio * 48
-    + entertainmentRatio * 15
-    + Math.min(14, switchRate * 0.9)
-    - recoveryRatio * 24,
-  );
-  let distractionScore = clamp(
-    8
-    + socialRatio * 38
-    + entertainmentRatio * 34
-    + switchPenalty * 1.45
-    + launchPenalty
-    - deepWorkRatio * 24,
-  );
-  let burnoutScore = clamp(
-    fatigueScore * 0.52
-    + distractionScore * 0.18
-    + lateNightRatio * 24
-    + Math.max(0, totalMinutes - 360) / 8
-    + Math.max(0, productiveRatio - 0.75) * 20
-    - recoveryRatio * 15,
-  );
-
-  if (!totalMinutes) {
-    focusScore = 0;
-    fatigueScore = 0;
-    distractionScore = 0;
-    burnoutScore = 0;
-  }
-  const burnoutRisk = burnoutScore >= 70 ? 'high' : burnoutScore >= 42 ? 'moderate' : 'low';
-  const topCategory = totalMinutes
-    ? CATEGORIES.reduce((best, category) => usage[category] > usage[best] ? category : best)
-    : 'none';
-  const telemetryFields = [
-    context.app_switches,
-    context.late_night_minutes,
-    context.deep_work_minutes,
-    context.launch_count,
-  ].filter(value => value > 0).length;
-
-  const insights = [];
-  const recommendations = [];
-  const alerts = [];
-
-  if (totalMinutes) {
-    insights.push(
-      productiveRatio >= 0.5
-        ? `Productive and learning activity made up ${Math.round(productiveRatio * 100)}% of screen time.`
-        : `Only ${Math.round(productiveRatio * 100)}% of screen time supported focused work or learning.`,
-    );
-    insights.push(
-      context.deep_work_minutes >= 50
-        ? `You logged ${context.deep_work_minutes} minutes of deeper focus activity.`
-        : 'No sustained deep-work block was recorded for this day.',
-    );
-  } else {
-    insights.push('Add today\'s usage to establish your first cognitive baseline.');
-  }
-
-  if (switchRate >= 12) {
-    insights.push(`Your switching rate was ${switchRate.toFixed(1)} changes per screen-time hour.`);
-    alerts.push(buildAlert(
-      'attention_fragmentation',
-      switchRate >= 20 ? 'high' : 'medium',
-      'Attention fragmentation',
-      'Frequent app switching can make it harder to settle into demanding work.',
-      `Estimated switching rate: ${switchRate.toFixed(1)} per hour.`,
-      'Silence nonessential notifications and protect one 25-minute focus block.',
-    ));
-  }
-
-  if (socialRatio >= 0.35) {
-    alerts.push(buildAlert(
-      'excessive_social_media',
-      socialRatio >= 0.5 ? 'high' : 'medium',
-      'Social overload',
-      'Social apps are taking a large share of today\'s attention.',
-      `Social usage represented ${Math.round(socialRatio * 100)}% of total screen time.`,
-      'Set one social check-in window and move the apps off the home screen.',
-    ));
-  }
-
-  if (context.late_night_minutes >= 90) {
-    insights.push(`${context.late_night_minutes} minutes of use happened late at night.`);
-    alerts.push(buildAlert(
-      'sleep_disruption',
-      context.late_night_minutes >= 180 ? 'high' : 'medium',
-      'Recovery may be disrupted',
-      'Late-night screen use can reduce the quality of mental recovery.',
-      `Late-night usage reached ${context.late_night_minutes} minutes.`,
-      'Create a 30-minute screen-free buffer before sleep tonight.',
-    ));
-  }
-
-  if (burnoutRisk === 'high') {
-    alerts.push(buildAlert(
-      'burnout_warning',
-      'high',
-      'Elevated overload pattern',
-      'Today\'s pattern combines fatigue, screen load, and limited recovery signals.',
-      `Burnout tendency score reached ${burnoutScore}/100.`,
-      'Reduce optional screen load and schedule a real recovery block.',
-    ));
-  }
-
-  if (recoveryRatio < 0.08 && totalMinutes >= 120) {
-    recommendations.push('Add a short walk, breathing session, or device-free recovery break.');
-  }
-  if (distractionScore >= 55) {
-    recommendations.push('Use Focus mode for 25 minutes and keep only one task visible.');
-  }
-  if (fatigueScore >= 55) {
-    recommendations.push('Move demanding work earlier and stop high-stimulation use before bed.');
-  }
-  if (productiveRatio < 0.4 && totalMinutes) {
-    recommendations.push('Reserve the first 30 minutes tomorrow for learning or priority work.');
-  }
-  if (totalMinutes && context.deep_work_minutes < 50) {
-    recommendations.push('Schedule one uninterrupted 25-minute deep-work block tomorrow.');
-  }
-  if (!totalMinutes) {
-    recommendations.push('Add today\'s usage to create your first personal baseline.');
-  }
-  if (!recommendations.length) {
-    recommendations.push('Keep the current balance and protect the habits that supported it.');
-  }
-
-  return {
-    focus_score: focusScore,
-    fatigue_score: fatigueScore,
-    distraction_score: distractionScore,
-    burnout_score: burnoutScore,
-    burnout_risk: burnoutRisk,
-    confidence: Math.min(0.92, 0.68 + telemetryFields * 0.06),
-    total_minutes: totalMinutes,
-    productive_ratio: productiveRatio,
-    social_ratio: socialRatio,
-    recovery_ratio: recoveryRatio,
-    deep_work_ratio: deepWorkRatio,
-    late_night_ratio: lateNightRatio,
-    switch_rate: switchRate,
-    top_category: topCategory,
-    usage,
-    insights,
-    recommendations,
-    alerts,
-    model_version: 'hybrid-rules-v2-local',
-    source: 'local',
-  };
+  return Core.calculatePrediction(context);
 }
 
 async function fetchWithTimeout(url, options, timeoutMs = 1800) {
@@ -754,6 +730,100 @@ function userInitial(user = currentUser) {
   return user?.email?.trim()?.charAt(0)?.toUpperCase() || 'O';
 }
 
+function shortStableId(seed) {
+  const source = String(seed || 'offline-workspace');
+  let hash = 2166136261;
+  for (let index = 0; index < source.length; index += 1) {
+    hash ^= source.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36).toUpperCase().padStart(7, '0').slice(0, 7);
+}
+
+function createLocalUserId() {
+  const randomSeed = globalThis.crypto?.randomUUID?.()
+    || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `NM-${shortStableId(randomSeed)}`;
+}
+
+function displayUserId() {
+  if (appMode === 'account' && currentUser) {
+    return `NM-${shortStableId(currentUser.id || currentUser.email)}`;
+  }
+  return localUserId || 'NM-LOCAL';
+}
+
+function maskEmail(email) {
+  const [name = '', domain = ''] = String(email || '').split('@');
+  if (!name || !domain) return 'Not signed in';
+  const visible = name.length <= 4 ? name.slice(0, 1) : name.slice(0, Math.min(10, name.length - 2));
+  return `${visible}****@${domain}`;
+}
+
+function maskPhone(number) {
+  const cleaned = String(number || '').replace(/[^\d+]/g, '');
+  const digits = cleaned.replace(/\D/g, '');
+  if (!digits) return 'Not set';
+  if (digits.length <= 4) return cleaned;
+  return `${cleaned.slice(0, Math.min(3, cleaned.length - 4))}****${digits.slice(-4)}`;
+}
+
+function setPasswordStatus(message = '', type = '') {
+  if (!elements.passwordChangeStatus) return;
+  elements.passwordChangeStatus.textContent = message;
+  elements.passwordChangeStatus.classList.toggle('error', type === 'error');
+  elements.passwordChangeStatus.classList.toggle('success', type === 'success');
+}
+
+function closeSettingsEditor(editorName) {
+  if (!editorName || editorName === 'phone') {
+    elements.phoneEditor?.classList.add('hidden');
+    elements.accountPhoneRow?.setAttribute('aria-expanded', 'false');
+  }
+  if (!editorName || editorName === 'password') {
+    elements.passwordEditor?.classList.add('hidden');
+    elements.accountPasswordRow?.setAttribute('aria-expanded', 'false');
+    setPasswordStatus('');
+  }
+}
+
+function openPhoneEditor() {
+  closeSettingsEditor('password');
+  if (elements.phoneInput) elements.phoneInput.value = phoneNumber;
+  elements.phoneEditor?.classList.toggle('hidden');
+  const isOpen = !elements.phoneEditor?.classList.contains('hidden');
+  elements.accountPhoneRow?.setAttribute('aria-expanded', String(isOpen));
+  if (isOpen) elements.phoneInput?.focus();
+}
+
+function openPasswordEditor() {
+  if (appMode !== 'account' || !authToken) {
+    showAuthView('Log in first to change your password.');
+    return;
+  }
+  closeSettingsEditor('phone');
+  elements.passwordEditor?.classList.toggle('hidden');
+  const isOpen = !elements.passwordEditor?.classList.contains('hidden');
+  elements.accountPasswordRow?.setAttribute('aria-expanded', String(isOpen));
+  setPasswordStatus(isOpen ? 'Use at least 8 characters for the new password.' : '');
+  if (isOpen) {
+    elements.currentPassword.value = '';
+    elements.newPassword.value = '';
+    elements.confirmNewPassword.value = '';
+    elements.currentPassword?.focus();
+  }
+}
+
+function applyTheme(theme, persist = false) {
+  themePreference = theme === 'dark' ? 'dark' : 'light';
+  document.documentElement.dataset.theme = themePreference;
+  document.querySelector('meta[name="theme-color"]')
+    ?.setAttribute('content', themePreference === 'dark' ? '#101513' : '#f4f0e7');
+  if (elements.themeToggle) elements.themeToggle.checked = themePreference === 'dark';
+  if (elements.themeLabel) elements.themeLabel.textContent = themePreference === 'dark' ? 'Dark' : 'Light';
+  if (persist) void storageSet({ [STORAGE_KEYS.theme]: themePreference });
+}
+
 function tokenSubject(token) {
   try {
     const payload = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
@@ -769,6 +839,15 @@ function renderAccount() {
   const initial = signedIn ? userInitial() : 'O';
   elements.accountAvatar.textContent = initial;
   elements.accountAvatarLarge.textContent = initial;
+  if (elements.accountUserId) elements.accountUserId.textContent = displayUserId();
+  if (elements.accountEmailMasked) {
+    elements.accountEmailMasked.textContent = signedIn ? maskEmail(currentUser.email) : 'Not signed in';
+  }
+  if (elements.accountPhoneStatus) elements.accountPhoneStatus.textContent = maskPhone(phoneNumber);
+  if (elements.accountPasswordStatus) {
+    elements.accountPasswordStatus.textContent = signedIn ? 'Change password' : 'Sign in first';
+  }
+  applyTheme(themePreference);
 
   if (signedIn) {
     const createdAt = currentUser.created_at ? new Date(currentUser.created_at) : null;
@@ -791,6 +870,105 @@ function renderAccount() {
   }
 }
 
+function openAccountPanel() {
+  renderAccount();
+  accountFocusReturn = document.activeElement;
+  elements.accountPanel.classList.remove('hidden');
+  elements.accountBackdrop?.classList.remove('hidden');
+  elements.accountButton?.setAttribute('aria-expanded', 'true');
+  document.body.classList.add('settings-open');
+  elements.accountPanel.focus();
+}
+
+function closeAccountPanel() {
+  elements.accountPanel.classList.add('hidden');
+  elements.accountBackdrop?.classList.add('hidden');
+  elements.accountButton?.setAttribute('aria-expanded', 'false');
+  document.body.classList.remove('settings-open');
+  closeSettingsEditor();
+  accountFocusReturn?.focus?.();
+  accountFocusReturn = null;
+}
+
+function handleAccountPanelKeydown(event) {
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    closeAccountPanel();
+    return;
+  }
+  if (event.key !== 'Tab') return;
+  const focusable = [...elements.accountPanel.querySelectorAll(
+    'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+  )].filter(element => !element.closest('.hidden'));
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && [first, elements.accountPanel].includes(document.activeElement)) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === elements.accountPanel) {
+    event.preventDefault();
+    first.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+async function savePhoneNumber() {
+  phoneNumber = (elements.phoneInput?.value || '').trim();
+  await storageSet({ [STORAGE_KEYS.phoneNumber]: phoneNumber });
+  renderAccount();
+  closeSettingsEditor('phone');
+}
+
+async function savePasswordChange() {
+  if (appMode !== 'account' || !authToken) {
+    setPasswordStatus('Log in first to change your password.', 'error');
+    return;
+  }
+
+  const currentPassword = elements.currentPassword?.value || '';
+  const newPassword = elements.newPassword?.value || '';
+  const confirmPassword = elements.confirmNewPassword?.value || '';
+
+  if (!currentPassword) {
+    setPasswordStatus('Enter your current password.', 'error');
+    return;
+  }
+  if (newPassword.length < 8) {
+    setPasswordStatus('New password must be at least 8 characters.', 'error');
+    return;
+  }
+  if (newPassword !== confirmPassword) {
+    setPasswordStatus('The new passwords do not match.', 'error');
+    return;
+  }
+
+  elements.savePassword.disabled = true;
+  elements.savePassword.textContent = 'Updating...';
+  setPasswordStatus('Updating your password...', '');
+  try {
+    await requestAuth('/auth/password', {
+      method: 'PATCH',
+      body: JSON.stringify({
+        current_password: currentPassword,
+        new_password: newPassword,
+      }),
+    });
+    elements.currentPassword.value = '';
+    elements.newPassword.value = '';
+    elements.confirmNewPassword.value = '';
+    setPasswordStatus('Password updated.', 'success');
+    setTimeout(() => closeSettingsEditor('password'), 900);
+  } catch (error) {
+    setPasswordStatus(error.message || 'Could not update password.', 'error');
+  } finally {
+    elements.savePassword.disabled = false;
+    elements.savePassword.textContent = 'Update password';
+  }
+}
+
 function showAuthView(message = '') {
   appMode = 'signed-out';
   elements.accountPanel.classList.add('hidden');
@@ -810,18 +988,19 @@ function showWorkspace() {
 }
 
 async function resetWorkspaceData() {
-  currentContext = emptyContext();
-  currentPrediction = null;
+  snapshots = [];
   history = [];
   chatHistory = [];
   workspaceDate = localDateKey();
+  activateSnapshot(Core.createDailySnapshot({ date: workspaceDate }));
   populateContext(currentContext);
-  renderOverview(null);
+  renderOverview(currentSnapshot);
   renderTrends();
   elements.chatLog.querySelectorAll('.chat-message:not(:first-child)').forEach(message => message.remove());
   await storageRemove([
     STORAGE_KEYS.context,
     STORAGE_KEYS.prediction,
+    STORAGE_KEYS.snapshots,
     STORAGE_KEYS.snapshotDate,
     STORAGE_KEYS.history,
     STORAGE_KEYS.chat,
@@ -1023,6 +1202,7 @@ async function syncUsageToAccount(usage) {
 }
 
 async function requestPrediction(context) {
+  setEngineStatus('checking');
   try {
     const response = await fetchWithTimeout(`${API_BASE}/predict`, {
       method: 'POST',
@@ -1032,9 +1212,11 @@ async function requestPrediction(context) {
     if (!response.ok) throw new Error(`API returned ${response.status}`);
     const prediction = await response.json();
     prediction.source = 'cloud';
+    return Core.canonicalizePrediction(prediction, context);
+  } catch (error) {
+    const prediction = Core.calculatePrediction(context);
+    prediction.source = navigator.onLine ? 'unconfigured' : 'offline';
     return prediction;
-  } catch {
-    return predictLocally(context);
   }
 }
 
@@ -1179,7 +1361,7 @@ function renderForecast(result, context, hasData) {
   const predicted = clamp(result.focus_score + opportunity);
   const delta = predicted - result.focus_score;
   const confidence = clamp(
-    Math.round(result.confidence * 100) - 20 + Math.min(history.length * 3, 12),
+    Math.round(result.confidence) - 20 + Math.min(history.length * 3, 12),
     45,
     82,
   );
@@ -1190,7 +1372,7 @@ function renderForecast(result, context, hasData) {
   elements.forecastReason.textContent = reason;
   elements.forecastBurnout.textContent = result.burnout_risk === 'high'
     ? 'Elevated; prioritize recovery'
-    : result.burnout_risk === 'moderate'
+    : ['moderate', 'elevated'].includes(result.burnout_risk)
       ? 'Moderate; likely to ease with recovery'
       : 'Low and stable';
 }
@@ -1344,11 +1526,25 @@ function metricContributors(result, context) {
   };
 }
 
-function renderOverview(prediction) {
-  const result = prediction || predictLocally(emptyContext());
+function comparisonText(metric) {
+  const comparison = Core.metricComparison(metric, currentSnapshot, snapshots);
+  if (comparison.previous === null) return 'Previous: not available yet.';
+  const sign = comparison.change > 0 ? '+' : '';
+  return `Previous: ${comparison.previous}/100. Change: ${sign}${comparison.change}.`;
+}
+
+function renderOverview(snapshotOrPrediction) {
+  const snapshot = snapshotOrPrediction?.result
+    ? Core.normalizeSnapshot(snapshotOrPrediction, snapshotOrPrediction.date)
+    : Core.createDailySnapshot({
+        date: workspaceDate,
+        context: snapshotOrPrediction ? currentContext : emptyContext(),
+        prediction: snapshotOrPrediction,
+      });
+  const result = snapshot.result;
   const hasData = result.total_minutes > 0;
-  const context = hasData ? currentContext : emptyContext();
-  const confidence = hasData ? Math.round(result.confidence * 100) : 0;
+  const context = hasData ? snapshot.context : emptyContext();
+  const confidence = hasData ? Math.round(result.confidence) : 0;
   const contributors = metricContributors(result, context);
   const focusLabel = hasData ? supportiveScoreLabel('focus', result.focus_score) : 'No baseline';
 
@@ -1375,6 +1571,7 @@ function renderOverview(prediction) {
     ? 'Focus Potential estimates how well today\'s behavior supported sustained attention.'
     : 'Add a snapshot to explain your focus potential.';
   elements.focusConfidence.textContent = `${confidence}%`;
+  if (elements.focusComparison) elements.focusComparison.textContent = comparisonText('focus');
   renderContributorList(elements.focusContributors, hasData ? contributors.focus : []);
   elements.fatigueScore.textContent = result.fatigue_score;
   elements.fatigueLabel.textContent = hasData
@@ -1384,6 +1581,7 @@ function renderOverview(prediction) {
     ? 'Mental Fatigue estimates cognitive load from screen volume, timing, and recovery.'
     : 'Add a snapshot to reveal fatigue contributors.';
   elements.fatigueConfidence.textContent = `${confidence}%`;
+  if (elements.fatigueComparison) elements.fatigueComparison.textContent = comparisonText('fatigue');
   renderContributorList(elements.fatigueContributors, hasData ? contributors.fatigue : []);
   elements.distractionScore.textContent = result.distraction_score;
   elements.distractionLabel.textContent = hasData
@@ -1393,6 +1591,7 @@ function renderOverview(prediction) {
     ? 'Distraction Load estimates attention fragmentation from app mix and switching behavior.'
     : 'Add a snapshot to reveal distraction contributors.';
   elements.distractionConfidence.textContent = `${confidence}%`;
+  if (elements.distractionComparison) elements.distractionComparison.textContent = comparisonText('distraction');
   renderContributorList(elements.distractionContributors, hasData ? contributors.distraction : []);
   elements.burnoutRisk.textContent = result.burnout_risk;
   elements.burnoutScore.textContent = `${result.burnout_score} / 100`;
@@ -1400,6 +1599,7 @@ function renderOverview(prediction) {
     ? 'Burnout Tendency combines behavioral load and recovery signals. It is not a diagnosis.'
     : 'Add a snapshot to explain recovery pressure.';
   elements.burnoutConfidence.textContent = `${confidence}%`;
+  if (elements.burnoutComparison) elements.burnoutComparison.textContent = comparisonText('burnout');
   renderContributorList(elements.burnoutContributors, hasData ? contributors.burnout : []);
   elements.productiveRatio.textContent = `${Math.round(result.productive_ratio * 100)}%`;
   elements.totalTime.textContent = formatMinutes(result.total_minutes);
@@ -1419,8 +1619,12 @@ function renderOverview(prediction) {
     elements.alertReason.textContent = alert.reason;
   }
 
-  const recommendation = result.recommendations?.[0];
-  elements.recommendationTitle.textContent = hasData ? 'One useful move for tomorrow' : 'Create your first baseline';
+  const recommendation = hasData
+    ? result.primary_action?.action || result.recommendations?.[0]
+    : 'Enter today\'s app usage to receive one clear, achievable next step.';
+  elements.recommendationTitle.textContent = hasData
+    ? result.primary_action?.title || 'One useful move for tomorrow'
+    : 'Create your first baseline';
   elements.recommendationText.textContent = recommendation
     || 'Enter today\'s app usage and optional behavior signals to get a focused intervention.';
 
@@ -1437,38 +1641,33 @@ function renderOverview(prediction) {
 }
 
 function upsertHistoryEntry(prediction, context) {
-  const entry = {
+  activateSnapshot(Core.createDailySnapshot({
     date: localDateKey(),
-    focus_score: prediction.focus_score,
-    fatigue_score: prediction.fatigue_score,
-    distraction_score: prediction.distraction_score,
-    burnout_score: prediction.burnout_score,
-    burnout_risk: prediction.burnout_risk,
-    productive_ratio: prediction.productive_ratio,
-    total_minutes: prediction.total_minutes,
     context,
-  };
-  history = history.filter(item => item.date !== entry.date);
-  history.push(entry);
-  history.sort((a, b) => a.date.localeCompare(b.date));
-  history = history.slice(-30);
+    prediction,
+    source: extractionState.items.length ? 'screenshot' : 'manual',
+    extraction: extractionState,
+  }));
+  snapshots = Core.upsertSnapshot(snapshots, currentSnapshot);
+  refreshHistoryView();
 }
 
 function lastSevenDays() {
-  const byDate = new Map(history.map(entry => [entry.date, entry]));
-  return Array.from({ length: 7 }, (_, index) => {
-    const date = new Date();
-    date.setDate(date.getDate() - (6 - index));
-    const key = localDateKey(date);
+  reconcileCurrentSnapshot();
+  return Core.buildTrend(snapshots, localDateKey()).slots.map(slot => {
+    const date = new Date(`${slot.date}T12:00:00`);
     return {
-      date: key,
+      date: slot.date,
       label: date.toLocaleDateString(APP_LOCALE, { month: 'numeric', day: 'numeric' }),
-      entry: byDate.get(key) || null,
+      entry: slot.snapshot && slot.snapshot.validation.valid
+        ? snapshotHistoryEntry(slot.snapshot)
+        : null,
     };
   });
 }
 
 function renderTrends() {
+  reconcileCurrentSnapshot();
   const days = lastSevenDays();
   const available = days.filter(day => day.entry);
   const coverageLabel = `${available.length} recorded ${available.length === 1 ? 'day' : 'days'}`;
@@ -1488,10 +1687,16 @@ function renderTrends() {
     const focus = day.entry.focus_score || 0;
     const fatigue = day.entry.fatigue_score || 0;
     return `
-      <div class="trend-day recorded" title="${day.date}: focus ${focus}, fatigue ${fatigue}">
+      <div
+        class="trend-day recorded"
+        tabindex="0"
+        role="img"
+        aria-label="${day.date}: focus ${focus} out of 100, fatigue ${fatigue} out of 100"
+        data-tooltip="Focus ${focus} · Fatigue ${fatigue}"
+      >
         <div class="trend-bars">
-          <div class="trend-bar focus" style="--value: ${focus}"></div>
-          <div class="trend-bar fatigue" style="--value: ${fatigue}"></div>
+          <div class="trend-bar focus" style="--value: ${focus}"><span>${focus}</span></div>
+          <div class="trend-bar fatigue" style="--value: ${fatigue}"><span>${fatigue}</span></div>
         </div>
         <span class="trend-day-label">${day.label}</span>
       </div>
@@ -1501,8 +1706,9 @@ function renderTrends() {
     'aria-label',
     `Seven-day focus score chart. ${coverageLabel}.`,
   );
-  const showTrendOnboarding = available.length < 2;
+  const showTrendOnboarding = available.length === 0;
   elements.trendEmptyState.classList.toggle('hidden', !showTrendOnboarding);
+  elements.trendCoverageNote?.classList.toggle('hidden', available.length !== 1);
   elements.trendChart.classList.toggle('hidden', showTrendOnboarding);
   elements.trendChartLegend.classList.toggle('hidden', showTrendOnboarding);
   elements.averageFocusDetail.textContent = coverageLabel;
@@ -1595,59 +1801,42 @@ function addChatMessage(role, text, detail = '') {
   elements.chatLog.scrollTop = elements.chatLog.scrollHeight;
 }
 
-function buildLocalMentorResponse(question, prediction) {
-  const normalized = question.toLowerCase();
-  const dominant = dominantUsage(prediction);
-  const category = CATEGORY_LABELS[dominant.category] || 'your dominant app category';
-  const evidence = prediction.insights?.slice(0, 2) || [];
-  const recommendations = prediction.recommendations || [];
-  const focusStep = recommendations.find(item => (
-    /focus|deep-work|learning|priority work/i.test(item)
-  )) || recommendations[0];
-  const recoveryStep = recommendations.find(item => (
-    /walk|recovery|screen-free|earlier|bed/i.test(item)
-  )) || recommendations[0];
-  const nextStep = recommendations[0]
-    || 'Protect one short, interruption-free focus block tomorrow.';
-  let answer;
-
-  if (normalized.includes('distract') || normalized.includes('focus') || normalized.includes('switch')) {
-    answer = `${category} took the largest share of your attention at ${dominant.percentage}%. ${
-      currentContext.deep_work_minutes >= 25
-        ? `Your ${currentContext.deep_work_minutes}-minute deep-work block helped offset some of that pressure.`
-        : 'Without a protected deep-work block, your attention had fewer chances to settle.'
-    } ${focusStep || nextStep}`;
-  } else if (normalized.includes('tired') || normalized.includes('fatigue') || normalized.includes('sleep')) {
-    answer = `Today's energy pressure came mostly from ${formatMinutes(prediction.total_minutes)} of screen load${
-      currentContext.late_night_minutes
-        ? ` and ${currentContext.late_night_minutes} late-night minutes`
-        : ''
-    }. You do not need to overhaul the whole day: ${recoveryStep || nextStep}`;
-  } else if (normalized.includes('burnout') || normalized.includes('stress') || normalized.includes('overload')) {
-    answer = `Your current pattern suggests ${prediction.burnout_risk} behavioral overload pressure. The useful signal is not the label itself; it is whether screen load is being balanced by recovery. ${recoveryStep || nextStep}`;
-  } else {
-    answer = `${buildSnapshotInsight(prediction, currentContext)} The highest-leverage next move is simple: ${nextStep}`;
-  }
-
+function buildLocalMentorResponse(question) {
+  const response = Core.buildMentorResponse(question, currentSnapshot, snapshots);
   return {
-    answer,
-    evidence,
-    next_steps: prediction.recommendations?.slice(0, 2) || [],
+    answer: response.answer,
+    evidence: [response.evidence],
+    next_steps: [response.action],
+    disclaimer: 'Screen-time metadata cannot diagnose medical or mental-health conditions.',
   };
 }
 
 async function requestMentorResponse(question) {
-  const prediction = currentPrediction || predictLocally(currentContext);
+  const fallback = buildLocalMentorResponse(question);
+  if (!currentSnapshot.validation.valid) return fallback;
+
+  const recentHistory = snapshots
+    .filter(snapshot => snapshot.date < currentSnapshot.date && snapshot.validation.valid)
+    .slice(-7)
+    .map(snapshot => ({
+      date: snapshot.date,
+      focus_score: snapshot.result.focus_score,
+      fatigue_score: snapshot.result.fatigue_score,
+    }));
   try {
     const response = await fetchWithTimeout(`${API_BASE}/chat`, {
       method: 'POST',
       headers: apiHeaders(),
-      body: JSON.stringify({ question, context: currentContext }),
-    }, 2200);
+      body: JSON.stringify({
+        question,
+        context: currentSnapshot.context,
+        recent_history: recentHistory,
+      }),
+    }, 2400);
     if (!response.ok) throw new Error(`API returned ${response.status}`);
     return await response.json();
   } catch {
-    return buildLocalMentorResponse(question, prediction);
+    return fallback;
   }
 }
 
@@ -1693,6 +1882,18 @@ const OCR_APP_KEYWORDS = CATEGORIES
   .sort((left, right) => right.keyword.length - left.keyword.length);
 const OCR_APP_ALIASES = [
   {
+    key: 'facebook',
+    name: 'Facebook',
+    category: 'social',
+    patterns: [/\bfacebook\b/, /\bface\s*book\b/, /\bf[ao]cebook\b/],
+  },
+  {
+    key: 'messenger',
+    name: 'Messenger',
+    category: 'social',
+    patterns: [/\bmessenger\b/, /\bmessage[rn]\b/, /\bmesse[nm]ger\b/],
+  },
+  {
     key: 'lien quan',
     name: 'Lien Quan Mobile',
     category: 'games',
@@ -1725,14 +1926,22 @@ function inferOcrApp(text) {
 
 function parseDuration(text) {
   const normalized = normalizeText(text);
+  const hourUnits = '(?:h|hr|hrs|hour|hours|g|gio|tieng)';
+  const minuteUnits = "(?:m|min|mins|minute|minutes|p|ph|phut|['’′])";
   const hoursAndMinutes = normalized.match(
-    /(\d{1,2})\s*(?:h|hr|hrs|hour|hours|g|gio)\s*(\d{1,2})\s*(?:m|min|mins|minute|minutes|ph|phut)/,
+    new RegExp(`(\\d{1,2})\\s*${hourUnits}\\s*(\\d{1,2})\\s*${minuteUnits}`),
   );
   if (hoursAndMinutes) return Number(hoursAndMinutes[1]) * 60 + Number(hoursAndMinutes[2]);
-  const hours = normalized.match(/(\d{1,2})\s*(?:h|hr|hrs|hour|hours|g|gio)/);
+  const compactHoursAndMinutes = normalized.match(
+    new RegExp(`(\\d{1,2})\\s*${hourUnits}\\s*(\\d{1,2})(?!\\s*%)`),
+  );
+  if (compactHoursAndMinutes) {
+    return Number(compactHoursAndMinutes[1]) * 60 + Number(compactHoursAndMinutes[2]);
+  }
+  const hours = normalized.match(new RegExp(`(\\d{1,2})\\s*${hourUnits}`));
   if (hours) return Number(hours[1]) * 60;
   const minutes = normalized.match(
-    /(\d{1,3})\s*(?:m|min|mins|minute|minutes|ph|phut)/,
+    new RegExp(`(\\d{1,3})\\s*${minuteUnits}`),
   );
   return minutes ? Number(minutes[1]) : null;
 }
@@ -1740,9 +1949,9 @@ function parseDuration(text) {
 function extractPrimaryScreenTime(rowLines) {
   const joined = normalizeText(rowLines.join(' '));
   const durationPattern = [
-    '\\d{1,2}\\s*(?:h|hr|hrs|hour|hours|g|gio)',
-    '(?:\\s*\\d{1,2}\\s*(?:m|min|mins|minute|minutes|ph|phut))?',
-    '|\\d{1,3}\\s*(?:m|min|mins|minute|minutes|ph|phut)',
+    '\\d{1,2}\\s*(?:h|hr|hrs|hour|hours|g|gio|tieng)',
+    "(?:(?:\\s*\\d{1,2}\\s*(?:m|min|mins|minute|minutes|p|ph|phut|['’′]))|(?:\\s*\\d{1,2}(?!\\s*%)))?",
+    "|\\d{1,3}\\s*(?:m|min|mins|minute|minutes|p|ph|phut|['’′])",
   ].join('');
   const primaryPattern = new RegExp(
     [
@@ -1887,12 +2096,93 @@ function showScreenshotPreview(file) {
   if (previewUrl) URL.revokeObjectURL(previewUrl);
   previewUrl = URL.createObjectURL(file);
   elements.screenshotPreview.src = previewUrl;
-  elements.screenshotPreview.classList.remove('hidden');
+  elements.screenshotReview?.classList.remove('hidden');
 }
 
 function setOcrStatus(message, tone = '') {
   elements.ocrStatus.textContent = message;
   elements.ocrStatus.className = `import-status ${tone}`.trim();
+}
+
+function renderExtractionReview() {
+  const items = extractionState.items || [];
+  if (!items.length) {
+    elements.ocrMatches.innerHTML = '';
+    elements.ocrMatches.classList.add('hidden');
+    elements.ocrConfidence?.classList.add('hidden');
+    elements.applyExtraction?.classList.add('hidden');
+    return;
+  }
+
+  elements.ocrMatches.innerHTML = items.map((item, index) => `
+    <div class="ocr-review-row" data-extraction-index="${index}">
+      <label>
+        <span>App</span>
+        <input data-field="app" type="text" value="${escapeHtml(item.app)}" />
+      </label>
+      <label>
+        <span>Category</span>
+        <select data-field="category">
+          ${CATEGORIES.map(category => `
+            <option value="${category}" ${item.category === category ? 'selected' : ''}>
+              ${CATEGORY_LABELS[category]}
+            </option>
+          `).join('')}
+        </select>
+      </label>
+      <label>
+        <span>Minutes</span>
+        <input data-field="minutes" type="number" min="0" max="1440" value="${item.minutes}" />
+      </label>
+      <span class="ocr-row-confidence">${Math.round(item.confidence * 100)}% confidence</span>
+    </div>
+  `).join('');
+  elements.ocrMatches.classList.remove('hidden');
+  elements.ocrConfidence.textContent = `Overall extraction confidence: ${Math.round(extractionState.confidence * 100)}%. Review every value before applying.`;
+  elements.ocrConfidence.classList.remove('hidden');
+  elements.applyExtraction.classList.remove('hidden');
+  elements.applyExtraction.textContent = extractionState.reviewed
+    ? 'Values applied'
+    : 'Apply reviewed values';
+}
+
+function updateExtractionItem(event) {
+  const row = event.target.closest('[data-extraction-index]');
+  const field = event.target.dataset.field;
+  if (!row || !field) return;
+  const index = Number(row.dataset.extractionIndex);
+  const item = extractionState.items[index];
+  if (!item) return;
+  item[field] = field === 'minutes'
+    ? Math.max(0, Math.round(Number(event.target.value) || 0))
+    : event.target.value;
+  extractionState.reviewed = false;
+  elements.applyExtraction.textContent = 'Apply reviewed values';
+}
+
+function applyExtractedValues() {
+  if (!extractionState.items.length) return;
+  const usage = emptyUsage();
+  extractionState.items.forEach(item => {
+    if (CATEGORIES.includes(item.category)) usage[item.category] += Math.max(0, Number(item.minutes) || 0);
+  });
+  CATEGORIES.forEach(category => {
+    document.getElementById(category).value = usage[category];
+  });
+  extractionState.reviewed = true;
+  renderExtractionReview();
+  renderValidation(Core.validateContext(collectContext()));
+  setOcrStatus('Reviewed screenshot values have been applied. You can still edit category totals.', 'success');
+}
+
+function removeScreenshot() {
+  if (previewUrl) URL.revokeObjectURL(previewUrl);
+  previewUrl = null;
+  elements.screenshotPreview.removeAttribute('src');
+  elements.screenshotReview?.classList.add('hidden');
+  extractionState = { status: 'idle', confidence: 0, reviewed: true, items: [], error: '' };
+  renderExtractionReview();
+  setOcrStatus('Upload, drop, or paste a screen-time screenshot.');
 }
 
 async function processScreenshot(file) {
@@ -1905,31 +2195,56 @@ async function processScreenshot(file) {
   elements.ocrMatches.classList.add('hidden');
   elements.ocrMatches.innerHTML = '';
 
-  setOcrStatus('Scanning the screenshot locally...', 'processing');
+  extractionState = { status: 'processing', confidence: 0, reviewed: false, items: [], error: '' };
+  elements.importDropZone?.classList.add('is-processing');
+  setOcrStatus('Processing the screenshot locally...', 'processing');
 
   try {
     const lines = await recognizeScreenshot(file);
-    const { usage, matches } = parseDetectedUsage(lines);
+    const { matches } = parseDetectedUsage(lines);
 
     if (!matches.length) {
+      extractionState = {
+        status: 'error',
+        confidence: 0,
+        reviewed: false,
+        items: [],
+        error: 'No recognizable app-and-time rows were found.',
+      };
       setOcrStatus('No recognizable app-and-time rows were found. Enter the totals manually.', 'error');
       return;
     }
 
-    CATEGORIES.forEach(category => {
-      document.getElementById(category).value = usage[category];
-    });
-    elements.ocrMatches.innerHTML = matches.slice(0, 10).map(match => (
-      `<span class="ocr-match">${escapeHtml(match.name)} ${formatMinutes(match.minutes)}</span>`
-    )).join('');
-    elements.ocrMatches.classList.remove('hidden');
+    const items = matches.slice(0, 20).map(match => ({
+      app: match.name,
+      category: match.category,
+      minutes: match.minutes,
+      confidence: match.confidence >= 2 ? 0.9 : 0.58,
+    }));
+    extractionState = {
+      status: 'ready',
+      confidence: items.reduce((sum, item) => sum + item.confidence, 0) / items.length,
+      reviewed: false,
+      items,
+      error: '',
+    };
+    renderExtractionReview();
     setOcrStatus(
-      `Detected ${matches.length} apps using each app's On screen time. Review the totals before analyzing.`,
+      `Detected ${matches.length} apps. Review the app, category, and minutes before applying them.`,
       'success',
     );
   } catch (error) {
     console.error('Screenshot OCR failed:', error);
+    extractionState = {
+      status: 'error',
+      confidence: 0,
+      reviewed: false,
+      items: [],
+      error: 'The screenshot could not be read.',
+    };
     setOcrStatus('The screenshot could not be read. Try a sharper crop with app names and times.', 'error');
+  } finally {
+    elements.importDropZone?.classList.remove('is-processing');
   }
 }
 
@@ -1937,11 +2252,17 @@ async function handleAnalysisSubmit(event) {
   event.preventDefault();
   await rolloverWorkspaceDay();
   currentContext = collectContext();
-  const total = Object.values(currentContext.usage).reduce((sum, value) => sum + value, 0);
+  const validation = renderValidation(Core.validateContext(currentContext));
 
-  if (!total) {
-    elements.analysisStatus.textContent = 'Add at least one usage value before analyzing.';
+  if (!validation.valid) {
+    elements.analysisStatus.textContent = 'Review the highlighted totals before creating the snapshot.';
     elements.analysisStatus.className = 'form-status error';
+    return;
+  }
+  if (extractionState.items.length && !extractionState.reviewed) {
+    elements.analysisStatus.textContent = 'Review and apply the extracted screenshot values before saving.';
+    elements.analysisStatus.className = 'form-status error';
+    elements.applyExtraction?.focus();
     return;
   }
 
@@ -1954,19 +2275,24 @@ async function handleAnalysisSubmit(event) {
     setEngineStatus(currentPrediction.source);
     upsertHistoryEntry(currentPrediction, currentContext);
     workspaceDate = localDateKey();
-    await storageSet({
-      [STORAGE_KEYS.context]: currentContext,
-      [STORAGE_KEYS.prediction]: currentPrediction,
-      [STORAGE_KEYS.snapshotDate]: workspaceDate,
-      [STORAGE_KEYS.history]: history,
-    });
+    await persistSnapshots();
     if (appMode === 'account') {
       renderReminderSettings('Today is complete. The email reminder will be skipped.');
     }
-    renderOverview(currentPrediction);
+    renderOverview(currentSnapshot);
     renderTrends();
     void syncUsageToAccount(currentContext.usage);
+    elements.analysisStatus.textContent = currentPrediction.source === 'cloud'
+      ? 'Snapshot saved successfully and analyzed with the API.'
+      : currentPrediction.source === 'offline'
+        ? 'Snapshot saved locally while offline.'
+        : 'Snapshot saved locally. The analysis API is not configured or unavailable.';
+    elements.analysisStatus.className = `form-status ${currentPrediction.source === 'cloud' ? 'success' : 'warning'}`;
     switchScreen('overview');
+  } catch (error) {
+    console.error('Snapshot save failed:', error);
+    elements.analysisStatus.textContent = 'The snapshot could not be saved. Your reviewed values remain in the form.';
+    elements.analysisStatus.className = 'form-status error';
   } finally {
     elements.analyzeButton.disabled = false;
     elements.analyzeButton.textContent = 'Generate cognitive snapshot';
@@ -1986,9 +2312,27 @@ function bindEvents() {
   });
   elements.offlineButton?.addEventListener('click', continueOffline);
   elements.accountButton?.addEventListener('click', () => {
-    elements.accountPanel.classList.toggle('hidden');
+    if (elements.accountPanel.classList.contains('hidden')) openAccountPanel();
+    else closeAccountPanel();
   });
-  elements.closeAccount?.addEventListener('click', () => elements.accountPanel.classList.add('hidden'));
+  elements.closeAccount?.addEventListener('click', closeAccountPanel);
+  elements.accountBackdrop?.addEventListener('click', closeAccountPanel);
+  elements.accountPanel?.addEventListener('keydown', handleAccountPanelKeydown);
+  elements.accountPhoneRow?.addEventListener('click', openPhoneEditor);
+  elements.accountPasswordRow?.addEventListener('click', openPasswordEditor);
+  elements.savePhone?.addEventListener('click', () => void savePhoneNumber());
+  elements.cancelPhone?.addEventListener('click', () => closeSettingsEditor('phone'));
+  elements.phoneInput?.addEventListener('keydown', event => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      void savePhoneNumber();
+    }
+  });
+  elements.savePassword?.addEventListener('click', () => void savePasswordChange());
+  elements.cancelPassword?.addEventListener('click', () => closeSettingsEditor('password'));
+  elements.themeToggle?.addEventListener('change', () => {
+    applyTheme(elements.themeToggle.checked ? 'dark' : 'light', true);
+  });
   elements.reminderEnabled?.addEventListener('change', saveReminderSettings);
   elements.reminderTime?.addEventListener('change', saveReminderSettings);
   elements.testReminder?.addEventListener('click', sendTestReminder);
@@ -2005,6 +2349,9 @@ function bindEvents() {
   });
 
   elements.analysisForm?.addEventListener('submit', handleAnalysisSubmit);
+  elements.analysisForm?.addEventListener('input', () => {
+    renderValidation(Core.validateContext(collectContext()), false);
+  });
   elements.mentorForm?.addEventListener('submit', event => {
     event.preventDefault();
     handleMentorQuestion(elements.mentorQuestion?.value || '');
@@ -2016,6 +2363,28 @@ function bindEvents() {
     const [file] = event.target.files || [];
     processScreenshot(file);
     event.target.value = '';
+  });
+  elements.removeScreenshot?.addEventListener('click', removeScreenshot);
+  elements.applyExtraction?.addEventListener('click', applyExtractedValues);
+  elements.ocrMatches?.addEventListener('input', updateExtractionItem);
+  elements.ocrMatches?.addEventListener('change', updateExtractionItem);
+  ['dragenter', 'dragover'].forEach(type => {
+    elements.importDropZone?.addEventListener(type, event => {
+      event.preventDefault();
+      elements.importDropZone.classList.add('is-dragging');
+    });
+  });
+  ['dragleave', 'drop'].forEach(type => {
+    elements.importDropZone?.addEventListener(type, event => {
+      event.preventDefault();
+      elements.importDropZone.classList.remove('is-dragging');
+    });
+  });
+  elements.importDropZone?.addEventListener('drop', event => {
+    const file = [...(event.dataTransfer?.files || [])]
+      .find(item => item.type.startsWith('image/'));
+    if (file) processScreenshot(file);
+    else setOcrStatus('Drop an image file such as PNG, JPG, or WebP.', 'error');
   });
   document.addEventListener('paste', event => {
     const imageItem = Array.from(event.clipboardData?.items || [])
@@ -2037,43 +2406,62 @@ function bindEvents() {
 
 async function initialize() {
   bindEvents();
+  bindSnapshotStorageSync();
   setAuthMode('login');
   const stored = await storageGet(Object.values(STORAGE_KEYS));
 
-  history = Array.isArray(stored[STORAGE_KEYS.history]) ? stored[STORAGE_KEYS.history] : [];
+  themePreference = stored[STORAGE_KEYS.theme] === 'dark' ? 'dark' : 'light';
+  applyTheme(themePreference);
+  localUserId = stored[STORAGE_KEYS.localUserId] || createLocalUserId();
+  if (!stored[STORAGE_KEYS.localUserId]) {
+    await storageSet({ [STORAGE_KEYS.localUserId]: localUserId });
+  }
+  phoneNumber = typeof stored[STORAGE_KEYS.phoneNumber] === 'string'
+    ? stored[STORAGE_KEYS.phoneNumber]
+    : '';
+
   const today = localDateKey();
-  const snapshotDate = stored[STORAGE_KEYS.snapshotDate] || latestHistoryDate(history);
+  const legacyHistory = Array.isArray(stored[STORAGE_KEYS.history]) ? stored[STORAGE_KEYS.history] : [];
+  const storedSnapshots = Array.isArray(stored[STORAGE_KEYS.snapshots])
+    ? stored[STORAGE_KEYS.snapshots]
+    : Core.migrateLegacyState({
+        context: stored[STORAGE_KEYS.context],
+        prediction: stored[STORAGE_KEYS.prediction],
+        history: legacyHistory,
+        date: stored[STORAGE_KEYS.snapshotDate] || latestHistoryDate(legacyHistory) || today,
+      });
+  snapshots = Core.uniqueSnapshots(storedSnapshots);
+  refreshHistoryView();
   const hasStoredSnapshot = Boolean(
-    stored[STORAGE_KEYS.context] || stored[STORAGE_KEYS.prediction],
+    snapshots.length || stored[STORAGE_KEYS.context] || stored[STORAGE_KEYS.prediction],
   );
-  const hasTodaySnapshot = snapshotDate === today;
+  const todaySnapshot = snapshots.find(snapshot => snapshot.date === today) || null;
+  const hasTodaySnapshot = Boolean(todaySnapshot);
   const rolledOver = hasStoredSnapshot && !hasTodaySnapshot;
 
   workspaceDate = today;
-  currentContext = hasTodaySnapshot
-    ? stored[STORAGE_KEYS.context] || emptyContext()
-    : emptyContext();
-  currentPrediction = hasTodaySnapshot
-    ? stored[STORAGE_KEYS.prediction] || null
-    : null;
+  activateSnapshot(todaySnapshot || Core.createDailySnapshot({ date: today }));
   chatHistory = Array.isArray(stored[STORAGE_KEYS.chat]) ? stored[STORAGE_KEYS.chat] : [];
   accountDeviceId = stored[STORAGE_KEYS.devicePlatform] === clientPlatform()
     ? stored[STORAGE_KEYS.deviceId] || null
     : null;
 
   populateContext(currentContext);
-  renderOverview(currentPrediction);
+  renderOverview(currentSnapshot);
   renderTrends();
+  setupReminderTimeOptions();
   renderReminderSettings();
+  if (!Array.isArray(stored[STORAGE_KEYS.snapshots])) {
+    await persistSnapshots();
+  }
+  await storageRemove([
+    STORAGE_KEYS.context,
+    STORAGE_KEYS.prediction,
+    STORAGE_KEYS.snapshotDate,
+    STORAGE_KEYS.history,
+  ]);
   if (rolledOver) {
-    await storageRemove([
-      STORAGE_KEYS.context,
-      STORAGE_KEYS.prediction,
-      STORAGE_KEYS.snapshotDate,
-    ]);
     showNewDayStatus();
-  } else if (hasTodaySnapshot && !stored[STORAGE_KEYS.snapshotDate]) {
-    await storageSet({ [STORAGE_KEYS.snapshotDate]: today });
   }
 
   chatHistory.slice(-8).forEach(message => {

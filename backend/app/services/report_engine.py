@@ -2,8 +2,7 @@
 
 from dataclasses import dataclass
 
-from app.services.intelligence_engine import CATEGORIES, predict_cognitive_state
-
+from app.services.intelligence_engine import predict_cognitive_state
 
 
 @dataclass
@@ -50,7 +49,7 @@ def analyze_usage(usage: dict[str, int]) -> ReportResult:
 
     warnings = [alert.message for alert in prediction.alerts]
     if not warnings:
-        warnings = ["No elevated behavioral risk signals were detected today."]
+        warnings = ["No attention alert was generated from the supplied usage metadata."]
 
     return ReportResult(
         total_minutes=total_minutes,
