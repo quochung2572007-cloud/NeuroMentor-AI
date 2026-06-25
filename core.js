@@ -96,7 +96,31 @@
       .trim();
   }
 
+  function repairDurationText(value = "") {
+    return String(value)
+      .replace(/\b[il|]\s*(?=h\b|hr\b|hrs\b|hour\b|hours\b|g\b|gio\b|tieng\b)/gi, "1")
+      .replace(/(\d)\s*rn\b/gi, "$1m")
+      .replace(/(\d)\s*ni\b/gi, "$1m")
+      .replace(/(\d)\s*rr\b/gi, "$1m");
+  }
+
+  function combineHoursAndMinutes(hours, minutes = 0) {
+    const hourValue = Number(hours);
+    const minuteValue = Number(minutes);
+    if (
+      !Number.isFinite(hourValue) ||
+      !Number.isFinite(minuteValue) ||
+      hourValue < 0 ||
+      minuteValue < 0 ||
+      minuteValue >= 60
+    ) {
+      return null;
+    }
+    return (hourValue * 60) + minuteValue;
+  }
+
   function parseScreenDuration(value = "") {
+    value = repairDurationText(value);
     const normalized = normalizeSearchText(value).replace(/[’′]/g, "'");
     const hourUnit = "(?:h|hr|hrs|hour|hours|g|gio|tieng)";
     const minuteUnit = "(?:m|min|mins|minute|minutes|p|ph|phut|')";
@@ -104,16 +128,16 @@
       new RegExp(`(\\d{1,2})\\s*${hourUnit}\\s*(\\d{1,2})\\s*${minuteUnit}`),
     );
     if (hoursAndMinutes) {
-      return Number(hoursAndMinutes[1]) * 60 + Number(hoursAndMinutes[2]);
+      return combineHoursAndMinutes(hoursAndMinutes[1], hoursAndMinutes[2]);
     }
     const compactHoursAndMinutes = normalized.match(
       new RegExp(`(\\d{1,2})\\s*${hourUnit}\\s*(\\d{1,2})(?!\\s*%)`),
     );
     if (compactHoursAndMinutes) {
-      return Number(compactHoursAndMinutes[1]) * 60 + Number(compactHoursAndMinutes[2]);
+      return combineHoursAndMinutes(compactHoursAndMinutes[1], compactHoursAndMinutes[2]);
     }
     const hours = normalized.match(new RegExp(`(\\d{1,2})\\s*${hourUnit}`));
-    if (hours) return Number(hours[1]) * 60;
+    if (hours) return combineHoursAndMinutes(hours[1], 0);
     const minutes = normalized.match(new RegExp(`(\\d{1,3})\\s*${minuteUnit}`));
     return minutes ? Number(minutes[1]) : null;
   }

@@ -83,7 +83,7 @@ const CATEGORY_KEYWORDS = {
   ],
   entertainment: [
     'youtube', 'netflix', 'spotify', 'twitch', 'music', 'podcast', 'prime video', 'disney',
-    'hulu', 'max', 'tv', 'video', 'tiktok', 'capcut', 'camera', 'photos', 'gallery',
+    'hulu', 'max', 'tv', 'video', 'tiktok', 'capcut',
   ],
 };
 
@@ -1757,10 +1757,18 @@ async function handleAuthentication(mode) {
         : await loginWithSupabase(email, password);
 
       if (!authResult.session) {
-        if (signingUp) setAuthMode('login');
+        if (signingUp) {
+          elements.loginEmail.value = email;
+          elements.loginPassword.value = '';
+          elements.signupForm.reset();
+          setAuthMode('login');
+          elements.loginPassword.focus();
+        }
         setAuthStatus(
-          'Account created. Log in with the same email and password to continue.',
-          'success',
+          signingUp
+            ? 'Account created. Log in with the same email and password to continue.'
+            : 'Login did not return a session. Try again.',
+          signingUp ? 'success' : 'error',
         );
         return;
       }
@@ -2787,6 +2795,10 @@ const OCR_APP_ALIASES = [
     category: 'social',
     patterns: [/\bmessenger\b/, /\bmessage[rn]\b/, /\bmesse[nm]ger\b/],
   },
+  { key: 'instagram', name: 'Instagram', category: 'social', patterns: [/\binstagram\b/, /\binsta\s*gram\b/, /\binstagrarn\b/] },
+  { key: 'youtube', name: 'YouTube', category: 'entertainment', patterns: [/\byou\s*tube\b/, /\byoutube\b/] },
+  { key: 'zalo', name: 'Zalo', category: 'social', patterns: [/\bzalo\b/] },
+  { key: 'locket', name: 'Locket', category: 'social', patterns: [/\blocket\b/] },
   {
     key: 'lien quan',
     name: 'Liên Quân Mobile',
@@ -2801,10 +2813,33 @@ const OCR_APP_ALIASES = [
   { key: 'grab', name: 'Grab', category: 'productivity', patterns: [/\b[gc]rab\b/] },
   { key: 'dich tflat', name: 'Dịch TFlat', category: 'learning', patterns: [/\bdich\s*t\s*flat\b/, /\btflat\b/] },
   { key: 'google', name: 'Google', category: 'productivity', patterns: [/\bgoogle\b/] },
+  { key: 'chrome', name: 'Chrome', category: 'productivity', patterns: [/\bchrome\b/] },
+  { key: 'camera', name: 'Camera', category: '', patterns: [/\bcamera\b/, /\bcamer[ao]\b/] },
+  { key: 'photos', name: 'Photos', category: '', patterns: [/\bphotos?\b/, /\bgallery\b/] },
+  { key: 'capcut', name: 'CapCut', category: 'entertainment', patterns: [/\bcap\s*cut\b/] },
+  { key: 'spotify', name: 'Spotify', category: 'entertainment', patterns: [/\bspotify\b/] },
 ];
 
 function titleCase(value) {
   return value.replace(/\b\w/g, character => character.toUpperCase());
+}
+
+function cleanMatchedOcrAppName(text, fallbackName) {
+  const candidate = Core.extractAppNameCandidate(text);
+  if (!candidate) return titleCase(fallbackName);
+  const stripped = candidate
+    .replace(/^[^A-Za-z0-9]+/, '')
+    .replace(/^\d+[\])}:._-]*\s*/, '')
+    .replace(/^[a-z]{1,4}\s+(?=[A-Z])/, '')
+    .trim();
+  if (!stripped) return titleCase(fallbackName);
+  const normalizedStripped = normalizeText(stripped);
+  const normalizedFallback = normalizeText(fallbackName);
+  if (normalizedStripped === normalizedFallback) return titleCase(fallbackName);
+  if (normalizedStripped.endsWith(` ${normalizedFallback}`)) return titleCase(fallbackName);
+  return normalizedStripped.includes(normalizedFallback)
+    ? stripped
+    : titleCase(fallbackName);
 }
 
 function inferOcrApp(text) {
@@ -2814,7 +2849,7 @@ function inferOcrApp(text) {
     return {
       key: alias.key,
       name: alias.name,
-      category: alias.category,
+      category: alias.category || '',
     };
   }
   const match = OCR_APP_KEYWORDS.find(({ keyword }) => {
@@ -2824,7 +2859,7 @@ function inferOcrApp(text) {
   if (!match) return null;
   return {
     key: match.keyword,
-    name: Core.extractAppNameCandidate(text) || titleCase(match.keyword),
+    name: cleanMatchedOcrAppName(text, match.keyword),
     category: match.category,
   };
 }
@@ -2834,12 +2869,501 @@ function canonicalizeKnownOcrItems(items) {
     if (!Core.extractAppNameCandidate(item.text)) return item;
     const recognizedApp = inferOcrApp(item.text);
     if (!recognizedApp) return item;
-    const minutes = Core.parseScreenDuration(item.text);
+    const minutes = parseOnScreenDurationMinutes(item.text) ?? Core.parseScreenDuration(item.text);
     return {
       ...item,
       text: minutes === null ? recognizedApp.name : `${recognizedApp.name} ${minutes}m`,
     };
   });
+}
+
+function keepRawAndCanonicalOcrItems(items) {
+  const rawItems = items.map(normalizeOcrItem).filter(item => item.text);
+  const canonicalItems = canonicalizeKnownOcrItems(rawItems);
+  const seen = new Set();
+
+  return [...rawItems, ...canonicalItems].filter(item => {
+    const key = `${Math.round(item.x)}:${Math.round(item.y)}:${normalizeText(item.text)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function normalizeOcrItem(item, index) {
+  const source = typeof item === 'string' ? { text: item } : (item || {});
+  const confidenceValue = Number(source.confidence);
+  return {
+    text: String(source.text || source.rawValue || '').replace(/\s+/g, ' ').trim(),
+    x: Number(source.x ?? source.left ?? 0) || 0,
+    y: Number(source.y ?? source.top ?? index * 24) || 0,
+    width: Math.max(0, Number(source.width ?? 0) || 0),
+    height: Math.max(1, Number(source.height ?? 20) || 20),
+    confidence: Number.isFinite(confidenceValue)
+      ? Math.max(0, Math.min(1, confidenceValue > 1 ? confidenceValue / 100 : confidenceValue))
+      : 0.7,
+  };
+}
+
+function repairOcrDurationText(text) {
+  return String(text)
+    .replace(/\b[il|]\s*(?=h\b|hr\b|hrs\b|hour\b|hours\b|g\b|gio\b|tieng\b)/gi, '1')
+    .replace(/(\d)\s*rn\b/gi, '$1m')
+    .replace(/(\d)\s*ni\b/gi, '$1m')
+    .replace(/(\d)\s*rr\b/gi, '$1m');
+}
+
+function parseOcrDurationMinutes(text) {
+  const source = repairOcrDurationText(text);
+  const direct = Core.parseScreenDuration(source);
+  if (direct !== null && direct > 0 && direct <= 1440) return direct;
+  return null;
+}
+
+function parseExplicitOnScreenDurationMinutes(text) {
+  const repaired = repairOcrDurationText(text);
+  const normalized = normalizeText(repaired)
+    .replace(/\d{1,3}(?:[.,]\d{1,2})?\s*%/g, ' ');
+  const onScreenIndex = normalized.search(/(?:on\s*screen|screen\s*on|screen time|foreground|tren man hinh|man hinh)/);
+  if (onScreenIndex < 0) return null;
+
+  const chunk = normalized
+    .slice(onScreenIndex)
+    .split(/background|back\s*ground|hoat\s*dong\s*nen|hoat\s*dong\s*ngam|chay\s*nen|battery usage|other battery/i)[0];
+  const hourUnit = '(?:h|hr|hrs|hour|hours|g|gio|tieng)';
+  const minuteUnit = "(?:m|min|mins|minute|minutes|p|ph|phut|')";
+  const hourMinute = chunk.match(new RegExp(`(\\d{1,2})\\s*${hourUnit}\\D{0,18}(\\d{1,2})\\s*${minuteUnit}\\b`));
+  if (hourMinute) {
+    const hours = Number(hourMinute[1]);
+    const minutes = Number(hourMinute[2]);
+    const total = (hours * 60) + minutes;
+    if (hours > 0 && hours <= 24 && minutes >= 0 && minutes < 60 && total <= 1440) return total;
+  }
+
+  const compactHourMinute = chunk.match(new RegExp(`(\\d{1,2})\\s*${hourUnit}\\s*(\\d{1,2})(?!\\s*%)`));
+  if (compactHourMinute) {
+    const hours = Number(compactHourMinute[1]);
+    const minutes = Number(compactHourMinute[2]);
+    const total = (hours * 60) + minutes;
+    if (hours > 0 && hours <= 24 && minutes >= 0 && minutes < 60 && total <= 1440) return total;
+  }
+
+  const looseHourMinute = chunk.match(new RegExp(`\\b(\\d{1,2})\\b\\D{0,18}(\\d{1,2})\\s*${minuteUnit}\\b`));
+  if (looseHourMinute) {
+    const hours = Number(looseHourMinute[1]);
+    const minutes = Number(looseHourMinute[2]);
+    const total = (hours * 60) + minutes;
+    if (hours > 0 && hours <= 24 && minutes >= 0 && minutes < 60 && total <= 1440) return total;
+  }
+
+  const minutesOnly = chunk.match(new RegExp(`(\\d{1,3})\\s*${minuteUnit}\\b`));
+  if (minutesOnly) {
+    const minutes = Number(minutesOnly[1]);
+    if (minutes > 0 && minutes <= 1440) return minutes;
+  }
+
+  const hoursOnly = chunk.match(new RegExp(`(\\d{1,2})\\s*${hourUnit}\\b`));
+  if (hoursOnly) {
+    const total = Number(hoursOnly[1]) * 60;
+    if (total > 0 && total <= 1440) return total;
+  }
+
+  return null;
+}
+
+function parseOnScreenDurationMinutes(text) {
+  const explicit = parseExplicitOnScreenDurationMinutes(text);
+  if (explicit !== null) return explicit;
+
+  const normalized = normalizeText(text);
+  const hasOnScreen = /(?:on\s*screen|screen\s*on|screen time|foreground|tren man hinh|man hinh)/.test(normalized);
+  if (!hasOnScreen) return null;
+  const withoutBackground = repairOcrDurationText(text)
+    .split(/background|back\s*ground|hoat\s*dong\s*nen|hoat\s*dong\s*ngam|chay\s*nen/i)[0];
+  return parseOcrDurationMinutes(withoutBackground);
+}
+
+function isDurationFragmentText(text) {
+  const normalized = normalizeText(repairOcrDurationText(text));
+  return parseOcrDurationMinutes(text) !== null
+    || /\d{1,2}\s*(?:h|hr|hrs|hour|hours|g|gio|tieng)\b/.test(normalized)
+    || /\d{1,3}\s*(?:m|min|mins|minute|minutes|p|ph|phut|')\b/.test(normalized);
+}
+
+function isLooseDurationNumberText(text) {
+  const normalized = normalizeText(text);
+  if (!normalized || normalized.includes('%') || /^\d{1,2}:\d{2}$/.test(normalized)) return false;
+  const looseNumbers = [...normalized.matchAll(/\b(\d{1,2})\b/g)]
+    .map(match => Number(match[1]))
+    .filter(value => Number.isFinite(value) && value > 0 && value < 60);
+  if (!looseNumbers.length) return false;
+  return /^\d{1,2}$/.test(normalized) || /\b\d{1,2}$/.test(normalized);
+}
+
+function parseMergedOcrDurationMinutes(texts) {
+  const source = repairOcrDurationText(texts.filter(Boolean).join(' '));
+  if (!source.trim()) return null;
+
+  const explicitOnScreen = parseExplicitOnScreenDurationMinutes(source);
+  if (explicitOnScreen !== null) return explicitOnScreen;
+
+  const normalized = normalizeText(source);
+  const hourUnit = '(?:h|hr|hrs|hour|hours|g|gio|tieng)';
+  const minuteUnit = "(?:m|min|mins|minute|minutes|p|ph|phut|')";
+  const hourMatches = [...normalized.matchAll(new RegExp(`(\\d{1,2})\\s*${hourUnit}\\b`, 'g'))]
+    .map(match => Number(match[1]))
+    .filter(value => Number.isFinite(value) && value >= 0);
+  const minuteMatches = [...normalized.matchAll(new RegExp(`(\\d{1,2})\\s*${minuteUnit}\\b`, 'g'))]
+    .map(match => Number(match[1]))
+    .filter(value => Number.isFinite(value) && value >= 0 && value < 60);
+  const onScreenLike = /(?:on\s*screen|screen\s*on|screen time|foreground|tren man hinh|man hinh)/.test(normalized);
+  const looseOnScreenPair = onScreenLike && !hourMatches.length && minuteMatches.length
+    ? normalized
+        .replace(/\d{1,3}(?:[.,]\d{1,2})?\s*%/g, ' ')
+        .match(new RegExp(`\\b(\\d{1,2})\\b\\D{0,16}(\\d{1,2})\\s*${minuteUnit}\\b`))
+    : null;
+  if (looseOnScreenPair) {
+    const looseHours = Number(looseOnScreenPair[1]);
+    const looseMinutes = Number(looseOnScreenPair[2]);
+    const mergedMinutes = (looseHours * 60) + looseMinutes;
+    if (looseHours > 0 && looseHours <= 12 && looseMinutes < 60 && mergedMinutes <= 1440) {
+      return mergedMinutes;
+    }
+  }
+
+  const looseMinuteMatches = minuteMatches.length ? [] : [
+    ...normalized
+      .replace(new RegExp(`\\d{1,2}\\s*${hourUnit}\\b`, 'g'), ' ')
+      .replace(new RegExp(`\\d{1,2}\\s*${minuteUnit}\\b`, 'g'), ' ')
+      .replace(/\d{1,3}(?:[.,]\d{1,2})?\s*%/g, ' ')
+      .matchAll(/\b(\d{1,2})\b/g),
+  ]
+    .map(match => Number(match[1]))
+    .filter(value => Number.isFinite(value) && value >= 0 && value < 60);
+  const candidateMinutes = minuteMatches.length ? minuteMatches : looseMinuteMatches;
+
+  if (hourMatches.length && candidateMinutes.length) {
+    const mergedMinutes = Math.max(...hourMatches) * 60 + Math.max(...candidateMinutes);
+    if (mergedMinutes > 0 && mergedMinutes <= 1440) return mergedMinutes;
+  }
+
+  const onScreenMinutes = parseOnScreenDurationMinutes(source);
+  if (onScreenMinutes !== null) return onScreenMinutes;
+
+  return parseOcrDurationMinutes(source);
+}
+
+function isBackgroundDurationText(text) {
+  const normalized = normalizeText(text);
+  return /(?:background|back\s*ground|nen|ngam|chay nen|hoat dong nen|hoat dong ngam)/.test(normalized)
+    && parseOnScreenDurationMinutes(text) === null;
+}
+
+function isOnScreenDurationText(text) {
+  const normalized = normalizeText(text);
+  return /(?:on\s*screen|screen\s*on|screen time|foreground|tren man hinh|man hinh)/.test(normalized)
+    && !isBackgroundDurationText(text);
+}
+
+function isNonAppOcrText(text) {
+  const normalized = normalizeText(text);
+  if (!normalized || normalized.length < 3) return true;
+  if (/^\d{1,2}:\d{2}$/.test(normalized)) return true;
+  if (/^\d{1,3}(?:[.,]\d{1,2})?\s*%$/.test(normalized)) return true;
+  if (/^[=_<>:;'"`~.,\- ]+$/.test(normalized)) return true;
+  return [
+    'battery usage',
+    'battery usage by app',
+    'muc su dung pin',
+    'su dung pin',
+    'other battery usage',
+    'show more',
+    'show activity',
+    'show categories',
+    'last 24 hours',
+    'last 10 days',
+    'today',
+    'yesterday',
+    'this week',
+    'tuan nay',
+    'hom nay',
+    'hom qua',
+    'hom kia',
+    'hien qua',
+    'ngay hom qua',
+    'ngay qua',
+    'hoat dong he thong',
+    'he thong',
+    'ung dung va hoat dong',
+    'tim hieu luong pin',
+    'su dung pin theo ung dung',
+    'su dung pin theo ung dung va hoat dong',
+    'dung nhieu nhat',
+    'hien thi danh muc',
+    'used for',
+    'total usage',
+    'background activity',
+    'home lock screen',
+    'home & lock screen',
+    'lock screen',
+    'wi fi',
+    'wifi',
+    'khung dich vu cua google',
+    'google play services',
+    'meta app manager',
+  ].some(phrase => normalized.includes(phrase));
+}
+
+function isLikelyAppNameForReview(name) {
+  const normalized = normalizeText(name);
+  const words = normalized.split(/\s+/).filter(Boolean);
+  if (isNonAppOcrText(name)) return false;
+  if (/\b(?:hom|hien|ngay)\s+(?:nay|qua|kia)\b/.test(normalized)) return false;
+  if (/\b(?:he\s*thong|hoat\s*dong|ung\s*dung|su\s*dung\s*pin)\b/.test(normalized)) return false;
+  if (words.some(word => ['hom', 'hien', 'qua', 'kia', 'nay', 'ngay', 'he', 'thong'].includes(word))) return false;
+  if (normalized.length < 4 || normalized.length > 36) return false;
+  if (/[=<>:;{}\[\]\\]/.test(name)) return false;
+  if (words.length > 4) return false;
+  if (/^[a-z]{2,8}$/.test(normalized) && name === normalized) return false;
+  if (words.some(word => word.length <= 2) && words.length > 1) return false;
+  return /[A-Z0-9.!]/.test(name) || words.length > 1;
+}
+
+function getOcrAppCandidate(text) {
+  if (isNonAppOcrText(text)) return null;
+  const recognizedApp = inferOcrApp(text);
+  if (!recognizedApp) return null;
+  const name = recognizedApp.name;
+  const category = recognizedApp.category || '';
+  return {
+    key: recognizedApp.key,
+    name,
+    category,
+    recognized: true,
+  };
+}
+
+function findMergedDurationInAppWindow(items, appItem, appIndex) {
+  const appY = appItem.y;
+  const minY = appY - Math.max(12, appItem.height * 0.8);
+  let nextAppY = Infinity;
+
+  for (let index = appIndex + 1; index < items.length; index += 1) {
+    const item = items[index];
+    if (item.y <= appY + Math.max(10, appItem.height * 0.5)) continue;
+    const candidate = getOcrAppCandidate(item.text);
+    if (!candidate) continue;
+    nextAppY = item.y;
+    break;
+  }
+
+  const maxY = Math.min(
+    Number.isFinite(nextAppY) ? nextAppY - 2 : Infinity,
+    appY + Math.max(96, appItem.height * 6),
+  );
+  const rowTexts = items
+    .filter(item => item.y >= minY && item.y <= maxY)
+    .filter(item => !isBackgroundDurationText(item.text))
+    .sort((left, right) => (left.y - right.y) || (left.x - right.x))
+    .map(item => item.text);
+  const mergedText = rowTexts.join(' ');
+  const normalized = normalizeText(mergedText);
+  const hasScreenContext = /(?:on\s*screen|screen\s*on|screen time|foreground|tren man hinh|man hinh)/.test(normalized);
+  const hasHourAndMinute = /\d{1,2}\s*(?:h|hr|hrs|hour|hours|g|gio|tieng)\b/.test(normalized)
+    && /\d{1,2}\s*(?:m|min|mins|minute|minutes|p|ph|phut|')\b/.test(normalized);
+
+  if (!hasScreenContext && !hasHourAndMinute) return null;
+
+  const minutes = parseMergedOcrDurationMinutes(rowTexts);
+  return minutes !== null && minutes > 0 && minutes <= 1440 ? minutes : null;
+}
+
+function findLinearDurationNearApp(items, app, appItem, appIndex) {
+  const rowTexts = [appItem.text];
+  let bestMinutes = parseOnScreenDurationMinutes(appItem.text);
+  const maxItemsToScan = Math.min(items.length, appIndex + 12);
+
+  for (let index = appIndex + 1; index < maxItemsToScan; index += 1) {
+    const item = items[index];
+    const nextApp = getOcrAppCandidate(item.text);
+    const reachedAnotherApp = nextApp && nextApp.key !== app.key;
+
+    if (reachedAnotherApp && rowTexts.some(text => (
+      isOnScreenDurationText(text) ||
+      isDurationFragmentText(text) ||
+      parseOcrDurationMinutes(text) !== null
+    ))) {
+      break;
+    }
+
+    if (!isBackgroundDurationText(item.text)) {
+      rowTexts.push(item.text);
+      const mergedMinutes = parseMergedOcrDurationMinutes(rowTexts);
+      if (mergedMinutes !== null && mergedMinutes > 0 && mergedMinutes <= 1440) {
+        bestMinutes = Math.max(bestMinutes || 0, mergedMinutes);
+      }
+    }
+
+    if (reachedAnotherApp && item.y > appItem.y + Math.max(12, appItem.height * 0.6)) {
+      break;
+    }
+  }
+
+  return bestMinutes !== null && bestMinutes > 0 ? bestMinutes : null;
+}
+
+function findRowContextDurationNearApp(items, app, appItem, appIndex) {
+  const candidates = [];
+  const addCandidate = minutes => {
+    if (minutes === null || minutes <= 0 || minutes > 1440) return;
+    candidates.push(minutes);
+  };
+  const parseContext = texts => {
+    const cleanedTexts = texts
+      .filter(Boolean)
+      .filter(text => !isBackgroundDurationText(text));
+    if (!cleanedTexts.length) return;
+    addCandidate(parseExplicitOnScreenDurationMinutes(cleanedTexts.join(' ')));
+    addCandidate(parseMergedOcrDurationMinutes(cleanedTexts));
+  };
+
+  const appY = appItem.y;
+  const appHeight = Math.max(12, appItem.height || 20);
+  let nextAppY = Infinity;
+
+  for (let index = appIndex + 1; index < items.length; index += 1) {
+    const item = items[index];
+    if (item.y <= appY + Math.max(8, appHeight * 0.45)) continue;
+    const nextApp = getOcrAppCandidate(item.text);
+    if (!nextApp || nextApp.key === app.key) continue;
+    nextAppY = item.y;
+    break;
+  }
+
+  const rowTexts = items
+    .filter(item => item.y >= appY - Math.max(10, appHeight * 0.8))
+    .filter(item => item.y <= Math.min(nextAppY - 1, appY + Math.max(104, appHeight * 6)))
+    .sort((left, right) => (left.y - right.y) || (left.x - right.x))
+    .map(item => item.text);
+  parseContext(rowTexts);
+
+  const linearTexts = [appItem.text];
+  const maxItemsToScan = Math.min(items.length, appIndex + 18);
+  for (let index = appIndex + 1; index < maxItemsToScan; index += 1) {
+    const item = items[index];
+    const nextApp = getOcrAppCandidate(item.text);
+    if (nextApp && nextApp.key !== app.key && item.y > appY + Math.max(8, appHeight * 0.45)) {
+      break;
+    }
+    linearTexts.push(item.text);
+    parseContext(linearTexts);
+  }
+
+  return candidates.length ? Math.max(...candidates) : null;
+}
+
+function findOnScreenMinutesNearApp(items, appItem, appIndex) {
+  const windowMinutes = findMergedDurationInAppWindow(items, appItem, appIndex);
+  if (windowMinutes !== null) return windowMinutes;
+
+  const inlineOnScreenMinutes = parseOnScreenDurationMinutes(appItem.text);
+  if (inlineOnScreenMinutes !== null) return inlineOnScreenMinutes;
+
+  const inlineMinutes = !isBackgroundDurationText(appItem.text)
+    ? parseOcrDurationMinutes(appItem.text)
+    : null;
+
+  const appY = appItem.y;
+  const maxY = appY + Math.max(76, appItem.height * 5);
+  const durationTexts = isDurationFragmentText(appItem.text) || isLooseDurationNumberText(appItem.text)
+    ? [appItem.text]
+    : [];
+  let bestOnScreenDuration = null;
+  let bestPlainDuration = inlineMinutes;
+
+  for (let index = appIndex + 1; index < items.length; index += 1) {
+    const item = items[index];
+    if (item.y > maxY) break;
+    const nextApp = getOcrAppCandidate(item.text);
+    if (nextApp && item.y > appY + Math.max(10, appItem.height * 0.5)) break;
+    if (isBackgroundDurationText(item.text)) continue;
+
+    const onScreenMinutes = parseOnScreenDurationMinutes(item.text);
+    if (onScreenMinutes !== null) {
+      bestOnScreenDuration = Math.max(bestOnScreenDuration || 0, onScreenMinutes);
+    }
+
+    if (isDurationFragmentText(item.text) || isOnScreenDurationText(item.text) || isLooseDurationNumberText(item.text)) {
+      durationTexts.push(item.text);
+      const mergedMinutes = parseMergedOcrDurationMinutes(durationTexts);
+      if (mergedMinutes !== null) {
+        if (durationTexts.some(text => isOnScreenDurationText(text))) {
+          bestOnScreenDuration = Math.max(bestOnScreenDuration || 0, mergedMinutes);
+        } else {
+          bestPlainDuration = Math.max(bestPlainDuration || 0, mergedMinutes);
+        }
+      }
+    }
+
+    const minutes = parseOcrDurationMinutes(item.text);
+    if (minutes === null) continue;
+    if (isOnScreenDurationText(item.text)) {
+      bestOnScreenDuration = Math.max(bestOnScreenDuration || 0, minutes);
+    } else if (item.x >= appItem.x) {
+      bestPlainDuration = Math.max(bestPlainDuration || 0, minutes);
+    }
+  }
+
+  return bestOnScreenDuration ?? bestPlainDuration;
+}
+
+function findBestOnScreenMinutesForApp(items, app) {
+  let bestMinutes = null;
+
+  items.forEach((item, index) => {
+    const candidateApp = getOcrAppCandidate(item.text);
+    if (!candidateApp || candidateApp.key !== app.key) return;
+
+    const spatialMinutes = findOnScreenMinutesNearApp(items, item, index);
+    const linearMinutes = findLinearDurationNearApp(items, app, item, index);
+    const rowContextMinutes = findRowContextDurationNearApp(items, app, item, index);
+    [spatialMinutes, linearMinutes, rowContextMinutes].forEach(minutes => {
+      if (minutes === null || minutes <= 0 || minutes > 1440) return;
+      bestMinutes = Math.max(bestMinutes || 0, minutes);
+    });
+  });
+
+  return bestMinutes;
+}
+
+function parseIosBatteryUsageRows(items) {
+  const normalizedItems = items
+    .map(normalizeOcrItem)
+    .filter(item => item.text)
+    .sort((left, right) => (left.y - right.y) || (left.x - right.x));
+  const matches = [];
+  const seen = new Set();
+
+  normalizedItems.forEach((item, index) => {
+    const app = getOcrAppCandidate(item.text);
+    if (!app || seen.has(app.key)) return;
+    const minutes = findBestOnScreenMinutesForApp(normalizedItems, app)
+      ?? findOnScreenMinutesNearApp(normalizedItems, item, index);
+    if (minutes === null) return;
+    seen.add(app.key);
+    matches.push({
+      key: app.key,
+      name: app.name,
+      category: app.category,
+      recognized: app.recognized,
+      minutes,
+      confidence: Math.max(0.45, Math.min(0.9, item.confidence + (app.recognized ? 0.08 : 0))),
+      needsMinutes: false,
+      needsCategory: !CATEGORIES.includes(app.category),
+    });
+  });
+
+  return matches;
 }
 
 function extractTextItems(detections) {
@@ -2898,32 +3422,97 @@ function extractTesseractItems(tsv = '') {
   })).sort((left, right) => (left.y - right.y) || (left.x - right.x));
 }
 
-async function enhanceScreenshotForOcr(file) {
+function clampPixel(value) {
+  return Math.max(0, Math.min(255, Math.round(value)));
+}
+
+function canvasToPngBlob(canvas, fallbackFile) {
+  return new Promise(resolve => canvas.toBlob(blob => resolve(blob || fallbackFile), 'image/png'));
+}
+
+async function createOcrImageVariant(file, mode = 'adaptive') {
   const bitmap = await createImageBitmap(file);
   try {
-    const scale = Math.max(1, Math.min(2, 1800 / bitmap.width));
+    const scale = Math.max(1.8, Math.min(3, 2400 / bitmap.width));
     const canvas = document.createElement('canvas');
     canvas.width = Math.round(bitmap.width * scale);
     canvas.height = Math.round(bitmap.height * scale);
     const context = canvas.getContext('2d', { willReadFrequently: true });
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = 'high';
     context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
     const image = context.getImageData(0, 0, canvas.width, canvas.height);
+
+    let sampledLuminance = 0;
+    let sampledPixels = 0;
+    const sampleStep = Math.max(4, Math.floor(image.data.length / 4 / 12000));
+    for (let index = 0; index < image.data.length; index += 4) {
+      if ((index / 4) % sampleStep !== 0) continue;
+      const luminance = (image.data[index] * 0.299)
+        + (image.data[index + 1] * 0.587)
+        + (image.data[index + 2] * 0.114);
+      sampledLuminance += luminance;
+      sampledPixels += 1;
+    }
+
+    const averageLuminance = sampledPixels ? sampledLuminance / sampledPixels : 128;
+    const darkScreenshot = averageLuminance < 110;
+    const threshold = darkScreenshot
+      ? Math.max(42, Math.min(132, averageLuminance + 42))
+      : Math.max(150, Math.min(218, averageLuminance - 18));
+
     for (let index = 0; index < image.data.length; index += 4) {
       const luminance = (image.data[index] * 0.299)
         + (image.data[index + 1] * 0.587)
         + (image.data[index + 2] * 0.114);
-      const value = luminance >= 245
-        ? 255
-        : Math.max(0, Math.min(255, ((luminance - 205) * 3) + 128));
+      let value;
+
+      if (mode === 'binary') {
+        value = darkScreenshot
+          ? (luminance > threshold ? 0 : 255)
+          : (luminance < threshold ? 0 : 255);
+      } else if (mode === 'invert') {
+        const base = darkScreenshot ? 255 - luminance : luminance;
+        value = clampPixel(((base - 128) * 2.15) + 146);
+      } else {
+        const base = darkScreenshot ? 255 - luminance : luminance;
+        value = base >= 245
+          ? 255
+          : clampPixel(((base - 178) * 3.1) + 154);
+      }
+
       image.data[index] = value;
       image.data[index + 1] = value;
       image.data[index + 2] = value;
     }
     context.putImageData(image, 0, 0);
-    return await new Promise(resolve => canvas.toBlob(blob => resolve(blob || file), 'image/png'));
+    return {
+      blob: await canvasToPngBlob(canvas, file),
+      mode,
+      darkScreenshot,
+    };
   } finally {
     bitmap.close?.();
   }
+}
+
+async function createOcrImageVariants(file) {
+  const adaptive = await createOcrImageVariant(file, 'adaptive');
+  const binary = await createOcrImageVariant(file, 'binary');
+  const variants = [adaptive, binary];
+  if (adaptive.darkScreenshot) {
+    variants.push(await createOcrImageVariant(file, 'invert'));
+  }
+  return variants;
+}
+
+function scoreOcrItems(items) {
+  const canonicalItems = canonicalizeKnownOcrItems(items);
+  const pairedRows = Core.pairOcrUsageRows(canonicalItems).length;
+  const batteryRows = parseIosBatteryUsageRows(canonicalItems).length;
+  const recognizedApps = canonicalItems.filter(item => inferOcrApp(item.text)).length;
+  const durations = canonicalItems.filter(item => parseOcrDurationMinutes(item.text) !== null).length;
+  return (Math.max(pairedRows, batteryRows) * 20) + (recognizedApps * 3) + durations;
 }
 
 function getExtensionAssetUrl(path) {
@@ -2976,7 +3565,7 @@ async function recognizeScreenshot(file) {
     try {
       bitmap = await createImageBitmap(file);
       const detections = await new TextDetector().detect(bitmap);
-      nativeItems = canonicalizeKnownOcrItems(extractTextItems(detections));
+      nativeItems = keepRawAndCanonicalOcrItems(extractTextItems(detections));
     } catch {
       // Fall through to the bundled OCR engine when the experimental API fails.
     } finally {
@@ -2986,22 +3575,42 @@ async function recognizeScreenshot(file) {
 
   try {
     const worker = await getOcrWorker();
-    const enhancedImage = await enhanceScreenshotForOcr(file);
-    const result = await worker.recognize(
-      enhancedImage,
-      {},
-      { blocks: true, text: true, hocr: false, tsv: true },
-    );
-    const items = extractTesseractItems(result.data?.tsv || '');
-    const fallbackItems = (result.data?.text || '')
-      .split(/\r?\n/)
-      .map(line => line.trim())
-      .filter(Boolean)
-      .map((text, index) => ({ text, x: 0, y: index * 24, width: 0, height: 20, confidence: 0.5 }));
-    const tesseractItems = canonicalizeKnownOcrItems(items.length ? items : fallbackItems);
-    return Core.pairOcrUsageRows(tesseractItems).length >= Core.pairOcrUsageRows(nativeItems).length
-      ? tesseractItems
-      : nativeItems;
+    const variants = await createOcrImageVariants(file);
+    const tesseractResults = [];
+
+    for (const variant of variants) {
+      const result = await worker.recognize(
+        variant.blob,
+        {},
+        { blocks: true, text: true, hocr: false, tsv: true },
+      );
+      const items = extractTesseractItems(result.data?.tsv || '');
+      const fallbackItems = (result.data?.text || '')
+        .split(/\r?\n/)
+        .map(line => line.trim())
+        .filter(Boolean)
+        .map((text, index) => ({ text, x: 0, y: index * 24, width: 0, height: 20, confidence: 0.5 }));
+      const tesseractItems = keepRawAndCanonicalOcrItems(items.length ? items : fallbackItems);
+      tesseractResults.push({
+        items: tesseractItems,
+        score: scoreOcrItems(tesseractItems),
+        mode: variant.mode,
+      });
+    }
+
+    const bestTesseract = tesseractResults
+      .sort((left, right) => right.score - left.score)[0] || { items: [], score: 0 };
+    const nativeScore = scoreOcrItems(nativeItems);
+    console.debug('NeuroMentor OCR variants', {
+      nativeScore,
+      selectedMode: bestTesseract.mode,
+      tesseractScores: tesseractResults.map(result => ({
+        mode: result.mode,
+        score: result.score,
+        rows: parseIosBatteryUsageRows(result.items).length,
+      })),
+    });
+    return bestTesseract.score >= nativeScore ? bestTesseract.items : nativeItems;
   } catch (error) {
     if (nativeItems.length) return nativeItems;
     throw error;
@@ -3010,9 +3619,9 @@ async function recognizeScreenshot(file) {
 
 function parseDetectedUsage(items) {
   const usage = emptyUsage();
-  const matches = Core.pairOcrUsageRows(canonicalizeKnownOcrItems(items)).map(match => {
+  const pairedMatches = Core.pairOcrUsageRows(canonicalizeKnownOcrItems(items)).map(match => {
     const recognizedApp = inferOcrApp(match.name);
-    const category = recognizedApp?.category || inferCategory(match.name) || '';
+    const category = recognizedApp ? recognizedApp.category : inferCategory(match.name) || '';
     return {
       key: recognizedApp?.key || `unknown:${match.key}`,
       name: recognizedApp?.name || match.name,
@@ -3023,11 +3632,46 @@ function parseDetectedUsage(items) {
       needsMinutes: false,
       needsCategory: !CATEGORIES.includes(category),
     };
+  }).filter(match => match.recognized);
+  const batteryMatches = parseIosBatteryUsageRows(items);
+  const mergedMatches = new Map();
+  const mergeMatch = (match) => {
+    const existing = mergedMatches.get(match.key);
+    if (!existing) {
+      mergedMatches.set(match.key, match);
+      return;
+    }
+
+    const keepNewMinutes = match.minutes > existing.minutes;
+    mergedMatches.set(match.key, {
+      ...existing,
+      ...match,
+      minutes: keepNewMinutes ? match.minutes : existing.minutes,
+      confidence: Math.max(existing.confidence || 0, match.confidence || 0),
+      category: CATEGORIES.includes(match.category) ? match.category : existing.category,
+      needsCategory: !CATEGORIES.includes(CATEGORIES.includes(match.category) ? match.category : existing.category),
+      needsMinutes: false,
+    });
+  };
+  pairedMatches.forEach(mergeMatch);
+  batteryMatches.forEach(mergeMatch);
+  const matches = [...mergedMatches.values()];
+  console.debug('NeuroMentor OCR matches', {
+    rawItems: items.map(item => normalizeOcrItem(item).text).filter(Boolean),
+    pairedMatches,
+    batteryMatches,
+    matches,
   });
   matches.forEach(match => {
     if (CATEGORIES.includes(match.category)) usage[match.category] += match.minutes;
   });
   return { usage, matches };
+}
+
+function isRecognizedUsageMatch(match) {
+  if (!match?.recognized || String(match.key || '').startsWith('unknown:')) return false;
+  if (!match.name || isNonAppOcrText(match.name)) return false;
+  return Boolean(inferOcrApp(match.name));
 }
 
 function showScreenshotPreview(file) {
@@ -3075,11 +3719,13 @@ function renderExtractionReview() {
         <input data-field="minutes" type="number" min="0" max="1440" value="${item.minutes}" />
       </label>
       <span class="ocr-row-confidence">${
-        !item.category
-          ? 'Choose what kind of app this is'
-          : !item.minutes && item.category !== 'ignore'
-            ? 'Enter the app usage in minutes'
-            : `${Math.round(item.confidence * 100)}% extraction confidence`
+        item.category === 'ignore'
+          ? 'Ignored app'
+          : !item.category
+            ? 'Choose a category or Ignore app'
+            : !item.minutes
+              ? 'Enter the app usage in minutes'
+              : `${Math.round(item.confidence * 100)}% extraction confidence`
       }</span>
     </div>
   `).join('');
@@ -3107,11 +3753,13 @@ function updateExtractionItem(event) {
   row.classList.toggle('needs-review', needsReview);
   const reviewMessage = row.querySelector('.ocr-row-confidence');
   if (reviewMessage) {
-    reviewMessage.textContent = !item.category
-      ? 'Choose what kind of app this is'
-      : !item.minutes && item.category !== 'ignore'
-        ? 'Enter the app usage in minutes'
-        : `${Math.round(item.confidence * 100)}% extraction confidence`;
+    reviewMessage.textContent = item.category === 'ignore'
+      ? 'Ignored app'
+      : !item.category
+        ? 'Choose a category or Ignore app'
+        : !item.minutes
+          ? 'Enter the app usage in minutes'
+          : `${Math.round(item.confidence * 100)}% extraction confidence`;
   }
   elements.applyExtraction.textContent = 'Apply reviewed values';
   scheduleBehaviorAutosave('screenshot-review');
@@ -3201,7 +3849,8 @@ async function processScreenshot(file) {
       return;
     }
 
-    const { matches } = parseDetectedUsage(ocrItems);
+    const { matches: rawMatches } = parseDetectedUsage(ocrItems);
+    const matches = rawMatches.filter(isRecognizedUsageMatch);
 
     if (!matches.length) {
       extractionState = {
@@ -3234,8 +3883,8 @@ async function processScreenshot(file) {
     const needsCategory = items.filter(item => !item.category).length;
     setOcrStatus(
       needsCategory
-        ? `Detected ${matches.length} apps with usage times. Choose a category for ${needsCategory} unknown app${needsCategory === 1 ? '' : 's'}.`
-        : `Detected ${matches.length} apps and filled their usage times automatically. Review before applying.`,
+        ? `Detected ${matches.length} recognized apps with usage times. Choose a category or Ignore app for ${needsCategory} app${needsCategory === 1 ? '' : 's'}.`
+        : `Detected ${matches.length} recognized apps and filled their usage times automatically. Review before applying.`,
       needsCategory ? 'warning' : 'success',
     );
     void enqueueCloudSync('Saving screenshot draft', () =>
