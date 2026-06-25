@@ -987,12 +987,14 @@ function supabaseRest(path, options = {}, timeoutMs) {
 }
 
 async function signUpWithSupabase(email, password) {
-  const response = await supabaseAuth('/signup', {
+  const redirectTo = supabaseRedirectUrl();
+  const response = await supabaseAuth(`/signup?redirect_to=${encodeURIComponent(redirectTo)}`, {
     method: 'POST',
     auth: false,
     body: {
       email,
       password,
+      email_redirect_to: redirectTo,
       data: { product: 'NeuroMentor AI' },
     },
   }, 12000);
