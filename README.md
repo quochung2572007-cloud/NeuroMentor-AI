@@ -10,24 +10,26 @@ NeuroMentor turns daily screen-time metadata into explainable estimates for:
 - Burnout tendency
 - Productive and recovery balance
 
-This repository contains a responsive web app, a Chrome extension using the same interface, and an
-optional FastAPI backend. Both clients work locally without an account or server. When the backend
-is available, they use the shared API for accounts, prediction, mentor responses, and usage sync.
+This repository contains a responsive web app, a Chrome extension using the same interface, a
+Supabase-backed persistence layer, and an optional FastAPI backend. Both clients still work locally
+without an account or server. When Supabase is configured, signed-in users keep their snapshots,
+behavior data, trends, recommendations, and mentor history across browsers and devices.
 
 ## MVP Features
 
 - Four-view extension dashboard: Overview, Analyze, Trends, and Mentor
-- First-run login and sign-up experience with persistent JWT sessions
-- Account panel, logout, offline guest mode, and authenticated daily usage sync
+- First-run login, sign-up, forgot-password, and persistent Supabase sessions
+- Account panel, logout, offline guest mode, and automatic account-linked usage sync
 - Manual category entry for Screen Time and Digital Wellbeing totals
 - Screenshot upload, drag-and-drop, clipboard paste, editable extraction review, replace, and remove workflow
 - Configurable daily email when today's Screen Time has not been added
 - Bundled local Tesseract OCR with confidence indicators and required review before values are saved
 - Explainable focus, fatigue, distraction, and burnout tendency scores
 - Behavioral alerts for social overload, attention fragmentation, late-night use, and overload
-- Seven-day local trend chart
+- Supabase-backed trend history with local cache fallback
 - Context-aware mentor questions
 - Privacy-first local fallback through `chrome.storage.local`
+- Row-level-secured database persistence for signed-in users
 - FastAPI prediction and mentor endpoints
 - Existing JWT, device, usage session, report, feedback, and PostgreSQL infrastructure
 
@@ -63,14 +65,75 @@ Resend requires a domain you own and verify before sending to all users:
 For local development, the backend process performs reminder checks. In production, the Render
 cron job performs them independently of the sleeping free API service.
 
+## Supabase Auth And Persistence
+
+Supabase is the source of truth for signed-in users. The browser keeps a small local cache only for
+performance and offline tolerance; account data is restored from Supabase after login.
+
+### 1. Create The Supabase Tables
+
+1. Create a Supabase project at <https://supabase.com/dashboard/projects>.
+2. Open **SQL Editor** in Supabase.
+3. Paste and run `supabase/migrations/001_neurommentor_persistence.sql`.
+4. Confirm these tables exist: `users`, `snapshots`, `behavior_data`, `mentor_messages`, and
+   `recommendations`.
+
+The migration enables Row Level Security so each user can only read or write their own records.
+Supabase Auth stores passwords and password hashes internally in `auth.users`; NeuroMentor does not
+duplicate password hashes in public application tables.
+
+### 2. Enable Auth Providers
+
+In **Authentication > Providers**:
+
+- Enable **Email** for email/password sign-up and login.
+- For local testing, either disable email confirmation or confirm the account from the email before
+  logging in.
+
+Add these redirect URLs in **Authentication > URL Configuration**:
+
+```text
+http://127.0.0.1:5500/
+http://localhost:5500/
+https://neuro-mentor-ai.vercel.app/
+```
+
+If your Vercel project uses a different domain, add that exact domain too.
+
+### 3. Connect The Frontend
+
+Open `config.js` and fill in your public Supabase project URL and anon key:
+
+```js
+globalThis.NEUROMENTOR_CONFIG = Object.freeze({
+  apiRoot: localHosts.has(currentHost) ? localApiRoot : productionApiRoot,
+  supabase: {
+    url: 'https://YOUR_PROJECT.supabase.co',
+    anonKey: 'YOUR_PUBLIC_ANON_KEY',
+  },
+});
+```
+
+The anon key is safe to use in frontend code because Row Level Security protects user data. Never put
+the Supabase `service_role` key in this repository or in browser code.
+
+After this is configured:
+
+- Sign-up logs the user in automatically when email confirmation is disabled.
+- Login loads the latest snapshot, trend history, personal baseline, and mentor messages.
+- Generating a cognitive snapshot automatically saves the snapshot, behavior data, and recommendation.
+- Sending a Mentor message automatically saves both the user message and Mentor response.
+- Updating extracted or manual behavior values automatically syncs the latest daily behavior row.
+
 ## Production Deployment
 
 The deployment files use this stack:
 
 - Frontend: Vercel
-- API: Render free web service
+- Auth and account persistence: Supabase
+- API: Render free web service, optional for legacy account APIs, prediction, and email reminders
 - Scheduler: Render cron job every 10 minutes
-- Database: Render PostgreSQL `basic-256mb`
+- Database: Supabase PostgreSQL for account history; Render PostgreSQL only if you use the FastAPI backend
 - Email: Resend free plan
 
 The Render database is currently `$6/month`; cron execution starts around `$1/month`. Vercel Hobby
@@ -114,8 +177,8 @@ The checked-in `.gitignore` excludes the local database and `backend/.env`.
 4. Deploy without a build command; `vercel.json` serves the static app.
 5. Open `https://neuro-mentor-ai.vercel.app`.
 
-If either generated hostname changes, update `config.js`, `render.yaml`, and the Render
-`APP_PUBLIC_URL` / `CORS_ALLOWED_ORIGINS` values, then redeploy.
+If either generated hostname changes, update `config.js`, Supabase redirect URLs, `render.yaml`, and
+the Render `APP_PUBLIC_URL` / `CORS_ALLOWED_ORIGINS` values, then redeploy.
 
 ## Run The Web App
 
@@ -127,14 +190,15 @@ python -m http.server 5500
 
 Open `http://localhost:5500/` in Chrome. The root page opens the responsive NeuroMentor web app.
 
-The web app works on desktop and mobile browser widths. Choose **Continue offline** if the FastAPI
-backend is not running. For login, signup, and cloud sync, also start the backend below.
+The web app works on desktop and mobile browser widths. Choose **Continue offline** if Supabase is
+not configured or you want to test guest mode. For account login and automatic cross-device history,
+configure Supabase above.
 
 ## Use Without The Backend
 
 Choose **Continue offline** on the welcome screen. No setup is required. The app calculates scores
-locally and stores versioned daily snapshots plus the mentor conversation in browser storage.
-Overview, Analyze, Trends, and Mentor all read the same snapshot model.
+locally and stores temporary versioned daily snapshots plus the mentor conversation in browser
+storage. Overview, Analyze, Trends, and Mentor all read the same snapshot model.
 
 The **Local** indicator in the header confirms this mode.
 
@@ -180,14 +244,16 @@ python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 ## Accounts
 
-Account features require the FastAPI backend. Start it using the instructions above, reload the
-extension or web page, then choose **Sign up**.
+Account features use Supabase when `config.js` contains a valid Supabase URL and anon key. The
+FastAPI backend remains available for older local account testing, prediction endpoints, and email
+reminders.
 
 - Registration uses email and a password of at least eight characters.
-- The extension stores the JWT in `chrome.storage.local` and restores the session when reopened.
-- New analyses are saved through the authenticated device and usage APIs.
+- The app stores the Supabase session in browser storage and restores it when reopened.
+- New analyses are saved automatically to `snapshots`, `behavior_data`, and `recommendations`.
+- Mentor chat saves both user and mentor messages to `mentor_messages`.
 - The account menu in the top-right corner shows connection status and provides logout.
-- If the backend becomes unavailable, an existing signed-in user can continue using local analysis.
+- If Supabase is not configured or becomes unavailable, users can continue with offline local analysis.
 
 ## Intelligence API
 
@@ -234,10 +300,10 @@ The existing authenticated APIs remain under:
 ```text
 Chrome Extension
   |-- Account login, signup, and offline guest mode
-  |-- Authenticated device and daily usage sync
+  |-- Supabase Auth sessions and account-linked daily usage sync
   |-- Local analysis fallback
   |-- Versioned daily snapshots shared by every screen
-  |-- Local history and mentor memory
+  |-- Supabase history with local cache fallback
   |-- Screenshot import
   |
 Responsive Web App
@@ -246,6 +312,11 @@ Responsive Web App
   |-- Browser local-storage fallback
   |
   +-- Vercel static hosting
+  |
+  +-- Supabase Auth + Postgres
+        |-- Row-level-secured users
+        |-- Snapshots and behavior data
+        |-- Mentor messages and recommendations
   |
   +-- Render FastAPI /v1
         |-- Pure shared scoring rules with browser parity fixtures
@@ -283,9 +354,10 @@ tests live in `tests/core.browser.test.html`; shared score fixtures live in
 `tests/fixtures/scoring_cases.json` and are also exercised by the backend tests.
 
 Backend configuration is documented in `backend/.env.example`. Local-only mode needs no environment
-variables. Accounts need `DATABASE_URL` and a non-default `JWT_SECRET`; production email delivery
-needs `RESEND_API_KEY`, `EMAIL_FROM`, and `APP_PUBLIC_URL`. Production deployments should also set
-`CORS_ALLOWED_ORIGINS` and disable `AUTO_CREATE_TABLES` after migrations are configured.
+variables. Supabase account persistence needs the public Supabase URL and anon key in `config.js`.
+The optional FastAPI backend needs `DATABASE_URL` and a non-default `JWT_SECRET`; production email
+delivery needs `RESEND_API_KEY`, `EMAIL_FROM`, and `APP_PUBLIC_URL`. Production deployments should
+also set `CORS_ALLOWED_ORIGINS` and disable `AUTO_CREATE_TABLES` after migrations are configured.
 
 ## Main Files
 
@@ -295,7 +367,8 @@ needs `RESEND_API_KEY`, `EMAIL_FROM`, and `APP_PUBLIC_URL`. Production deploymen
 - `popup.js` - Local intelligence, trends, mentor, storage, and API fallback
 - `core.js` - Versioned snapshots, pure calculations, validation, trends, and deterministic Mentor logic
 - `runtime.js` - Web/extension runtime detection
-- `config.js` - Local and production API routing
+- `config.js` - Local and production API routing plus Supabase client configuration
+- `supabase/migrations/001_neurommentor_persistence.sql` - Supabase Auth, tables, indexes, triggers, and RLS policies
 - `vercel.json` - Vercel static hosting and security headers
 - `render.yaml` - Render API, cron job, and PostgreSQL Blueprint
 - `assets/neurommentor-logo.png` - Full-resolution transparent NeuroMentor brand mark

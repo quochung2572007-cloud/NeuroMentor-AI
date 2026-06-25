@@ -1,5 +1,6 @@
 const API_ROOT = globalThis.NEUROMENTOR_CONFIG?.apiRoot || 'http://localhost:8000/v1';
 const API_BASE = `${API_ROOT}/intelligence`;
+const SUPABASE_CONFIG = globalThis.NEUROMENTOR_CONFIG?.supabase || {};
 const APP_LOCALE = 'en-US';
 const TREND_HISTORY_DAYS = 30;
 const Core = globalThis.NeuroMentorCore;
@@ -17,6 +18,7 @@ const STORAGE_KEYS = {
   chat: 'neuroMentorChat',
   authToken: 'neuroMentorAuthToken',
   authUser: 'neuroMentorAuthUser',
+  supabaseSession: 'neuroMentorSupabaseSession',
   appMode: 'neuroMentorAppMode',
   deviceId: 'neuroMentorDeviceId',
   devicePlatform: 'neuroMentorDevicePlatform',
@@ -97,6 +99,7 @@ const elements = {
   signupConfirm: document.getElementById('signup-confirm'),
   loginButton: document.getElementById('login-button'),
   signupButton: document.getElementById('signup-button'),
+  forgotPasswordButton: document.getElementById('forgot-password-button'),
   authStatus: document.getElementById('auth-status'),
   offlineButton: document.getElementById('offline-button'),
   engineStatus: document.getElementById('engine-status'),
@@ -249,6 +252,7 @@ let ocrWorkerPromise = null;
 let extractionState = { status: 'idle', confidence: 0, reviewed: true, items: [], error: '' };
 let accountFocusReturn = null;
 let authToken = null;
+let supabaseSession = null;
 let currentUser = null;
 let appMode = 'signed-out';
 let accountDeviceId = null;
@@ -256,6 +260,9 @@ let reminderSettings = { ...DEFAULT_REMINDER };
 let localUserId = null;
 let phoneNumber = '';
 let themePreference = 'light';
+let cloudSyncQueue = Promise.resolve();
+let behaviorAutosaveTimer = null;
+let pendingAuthStatus = null;
 
 function emptyUsage() {
   return Object.fromEntries(CATEGORIES.map(category => [category, 0]));
@@ -745,6 +752,475 @@ function apiHeaders(includeJson = true) {
   return headers;
 }
 
+function cleanSupabaseUrl() {
+  return String(SUPABASE_CONFIG.url || '').replace(/\/+$/, '');
+}
+
+function supabaseConfigured() {
+  const url = cleanSupabaseUrl();
+  const anonKey = String(SUPABASE_CONFIG.anonKey || '');
+  return /^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(url)
+    && anonKey.length > 40
+    && !anonKey.includes('YOUR_')
+    && !anonKey.includes('REPLACE_');
+}
+
+function accountPersistenceAvailable() {
+  return appMode === 'account' && Boolean(currentUser?.id && authToken) && supabaseConfigured();
+}
+
+function supabaseRedirectUrl() {
+  const url = new URL(window.location.href);
+  url.hash = '';
+  return url.toString();
+}
+
+function resetAuthRedirectUrl() {
+  const url = new URL(window.location.href);
+  [
+    'access_token',
+    'code',
+    'error',
+    'error_code',
+    'error_description',
+    'expires_in',
+    'provider',
+    'refresh_token',
+    'token_type',
+    'type',
+  ].forEach(key => url.searchParams.delete(key));
+  url.hash = '';
+  window.history.replaceState({}, document.title, `${url.pathname}${url.search}`);
+}
+
+function setPendingAuthStatus(message, tone = 'error') {
+  pendingAuthStatus = { message, tone };
+}
+
+function normalizeSupabaseUser(user) {
+  if (!user) return null;
+  return {
+    id: user.id,
+    email: user.email || user.user_metadata?.email || '',
+    created_at: user.created_at || user.createdAt || new Date().toISOString(),
+    provider: user.app_metadata?.provider || 'email',
+  };
+}
+
+function normalizeSupabaseSession(session) {
+  if (!session?.access_token) return null;
+  const expiresAt = Number(session.expires_at)
+    || Math.floor(Date.now() / 1000) + Number(session.expires_in || 3600);
+  return {
+    access_token: session.access_token,
+    refresh_token: session.refresh_token || '',
+    expires_at: expiresAt,
+    token_type: session.token_type || 'bearer',
+  };
+}
+
+async function persistSupabaseSession(session) {
+  supabaseSession = normalizeSupabaseSession(session);
+  authToken = supabaseSession?.access_token || null;
+  if (supabaseSession) {
+    await persistentStorageSet({ [STORAGE_KEYS.supabaseSession]: supabaseSession });
+  }
+}
+
+async function clearSupabaseSession() {
+  supabaseSession = null;
+  authToken = null;
+  await persistentStorageRemove([STORAGE_KEYS.supabaseSession]);
+}
+
+async function readSupabaseError(response) {
+  const fallback = response.status >= 500
+    ? 'Supabase is unavailable right now.'
+    : 'The Supabase request could not be completed.';
+  try {
+    const body = await response.json();
+    return body.error_description || body.msg || body.message || body.error || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+async function supabaseRequest(path, options = {}, timeoutMs = 9000) {
+  if (!supabaseConfigured()) {
+    throw new Error('Supabase is not configured. Add your project URL and anon key to config.js.');
+  }
+  const url = `${cleanSupabaseUrl()}${path}`;
+  const headers = {
+    apikey: SUPABASE_CONFIG.anonKey,
+    ...(options.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+    ...(options.auth !== false && authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+    ...(options.prefer ? { Prefer: options.prefer } : {}),
+    ...(options.headers || {}),
+  };
+  const response = await fetchWithTimeout(url, {
+    method: options.method || 'GET',
+    headers,
+    body: options.body === undefined
+      ? undefined
+      : typeof options.body === 'string'
+        ? options.body
+        : JSON.stringify(options.body),
+  }, timeoutMs);
+
+  if (!response.ok) {
+    throw new Error(await readSupabaseError(response));
+  }
+  if (response.status === 204) return null;
+  const text = await response.text();
+  return text ? JSON.parse(text) : null;
+}
+
+function supabaseAuth(path, options = {}, timeoutMs) {
+  return supabaseRequest(`/auth/v1${path}`, options, timeoutMs);
+}
+
+function supabaseRest(path, options = {}, timeoutMs) {
+  return supabaseRequest(`/rest/v1/${path}`, options, timeoutMs);
+}
+
+async function signUpWithSupabase(email, password) {
+  const response = await supabaseAuth('/signup', {
+    method: 'POST',
+    auth: false,
+    body: {
+      email,
+      password,
+      data: { product: 'NeuroMentor AI' },
+    },
+  }, 12000);
+  return {
+    session: normalizeSupabaseSession(response.session),
+    user: normalizeSupabaseUser(response.user),
+  };
+}
+
+async function loginWithSupabase(email, password) {
+  const response = await supabaseAuth('/token?grant_type=password', {
+    method: 'POST',
+    auth: false,
+    body: { email, password },
+  }, 12000);
+  return {
+    session: normalizeSupabaseSession(response),
+    user: normalizeSupabaseUser(response.user),
+  };
+}
+
+async function refreshSupabaseSession(session = supabaseSession) {
+  if (!session?.refresh_token) return null;
+  const response = await supabaseAuth('/token?grant_type=refresh_token', {
+    method: 'POST',
+    auth: false,
+    body: { refresh_token: session.refresh_token },
+  }, 12000);
+  const refreshed = normalizeSupabaseSession(response);
+  await persistSupabaseSession(refreshed);
+  return {
+    session: refreshed,
+    user: normalizeSupabaseUser(response.user),
+  };
+}
+
+async function getSupabaseUser() {
+  const user = await supabaseAuth('/user', { method: 'GET' }, 9000);
+  return normalizeSupabaseUser(user.user || user);
+}
+
+async function ensureSupabaseProfile(user = currentUser) {
+  if (!accountPersistenceAvailable() || !user?.id) return;
+  await supabaseRest('users?on_conflict=id', {
+    method: 'POST',
+    prefer: 'resolution=merge-duplicates,return=minimal',
+    body: {
+      id: user.id,
+      email: user.email,
+      created_at: user.created_at,
+    },
+  });
+}
+
+async function updateSupabasePassword(newPassword) {
+  await supabaseAuth('/user', {
+    method: 'PUT',
+    body: { password: newPassword },
+  }, 12000);
+}
+
+async function sendSupabasePasswordReset(email) {
+  await supabaseAuth('/recover', {
+    method: 'POST',
+    auth: false,
+    body: {
+      email,
+      redirect_to: supabaseRedirectUrl(),
+    },
+  }, 12000);
+}
+
+async function consumeSupabaseRedirectSession() {
+  if (!supabaseConfigured()) return false;
+  const params = new URLSearchParams(window.location.hash.slice(1));
+  const searchParams = new URLSearchParams(window.location.search);
+  const redirectError = params.get('error_description')
+    || searchParams.get('error_description')
+    || params.get('error')
+    || searchParams.get('error');
+  if (redirectError) {
+    setPendingAuthStatus(
+      redirectError.replace(/\+/g, ' ') || 'Sign-in could not be completed.',
+      'error',
+    );
+    resetAuthRedirectUrl();
+    return false;
+  }
+  if (!params.has('access_token')) return false;
+  const session = normalizeSupabaseSession({
+    access_token: params.get('access_token'),
+    refresh_token: params.get('refresh_token'),
+    expires_in: params.get('expires_in'),
+    token_type: params.get('token_type'),
+  });
+  if (!session) return false;
+  await persistSupabaseSession(session);
+  resetAuthRedirectUrl();
+  const user = await getSupabaseUser();
+  await startAccountSession(session.access_token, user, { source: 'supabase' });
+  const type = params.get('type');
+  if (type === 'recovery') {
+    setAuthStatus('Password recovery confirmed. Open Settings to choose a new password.', 'success');
+  }
+  return true;
+}
+
+function behaviorRowFromContext(context, date = localDateKey(), source = 'manual', snapshotId = null) {
+  const safeContext = Core.normalizeContext(context);
+  const row = {
+    user_id: currentUser.id,
+    snapshot_date: date,
+    social_minutes: safeContext.usage.social || 0,
+    productivity_minutes: safeContext.usage.productivity || 0,
+    learning_minutes: safeContext.usage.learning || 0,
+    entertainment_minutes: safeContext.usage.entertainment || 0,
+    gaming_minutes: safeContext.usage.games || 0,
+    health_minutes: safeContext.usage.health || 0,
+    app_switches: safeContext.app_switches || 0,
+    late_night_minutes: safeContext.late_night_minutes || 0,
+    deep_work_minutes: safeContext.deep_work_minutes || 0,
+    app_launches: safeContext.launch_count || safeContext.app_launches || 0,
+    reported_total_minutes: safeContext.reported_total_minutes ?? null,
+    source,
+    extraction: extractionState || {},
+  };
+  if (snapshotId) row.snapshot_id = snapshotId;
+  return row;
+}
+
+function snapshotRow(snapshot) {
+  const normalized = Core.normalizeSnapshot(snapshot, snapshot?.date);
+  const result = normalized.result;
+  return {
+    user_id: currentUser.id,
+    snapshot_date: normalized.date,
+    focus_score: result.focus_score,
+    fatigue_score: result.fatigue_score,
+    distraction_score: result.distraction_score,
+    burnout_score: result.burnout_score,
+    productive_ratio: result.productive_ratio,
+    confidence_score: result.confidence,
+    total_minutes: result.total_minutes,
+    model_version: result.model_version || 'shared-snapshot-v2',
+    source: normalized.source || 'manual',
+    context: normalized.context,
+    result,
+    extraction: normalized.extraction,
+    created_at: normalized.created_at,
+  };
+}
+
+function rowToSnapshot(row) {
+  return Core.normalizeSnapshot({
+    date: row.snapshot_date,
+    context: row.context,
+    prediction: row.result,
+    source: row.source,
+    extraction: row.extraction,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  }, row.snapshot_date);
+}
+
+function mentorMessageFromRow(row) {
+  const detail = row.detail || {};
+  return {
+    role: row.role === 'user' ? 'user' : 'mentor',
+    text: row.content,
+    detail: detail.text || detail.detail || '',
+    created_at: row.created_at,
+  };
+}
+
+async function saveBehaviorToCloud(context = collectContext(), date = workspaceDate, source = 'manual', snapshotId = null) {
+  if (!accountPersistenceAvailable()) return false;
+  const row = behaviorRowFromContext(context, date, source, snapshotId);
+  await supabaseRest('behavior_data?on_conflict=user_id,snapshot_date', {
+    method: 'POST',
+    prefer: 'resolution=merge-duplicates,return=minimal',
+    body: row,
+  });
+  return true;
+}
+
+async function saveRecommendationToCloud(snapshotRowResult, snapshot) {
+  const action = snapshot.result.primary_action;
+  if (!action?.action) return;
+  await supabaseRest('recommendations?on_conflict=user_id,snapshot_date,title', {
+    method: 'POST',
+    prefer: 'resolution=merge-duplicates,return=minimal',
+    body: {
+      user_id: currentUser.id,
+      snapshot_id: snapshotRowResult?.id || null,
+      snapshot_date: snapshot.date,
+      title: action.title || 'Primary recommendation',
+      action: action.action,
+      reason: action.reason || '',
+    },
+  });
+}
+
+async function saveSnapshotToCloud(snapshot = currentSnapshot) {
+  if (!accountPersistenceAvailable()) return false;
+  const normalized = Core.normalizeSnapshot(snapshot, snapshot?.date || workspaceDate);
+  const [savedSnapshot] = await supabaseRest('snapshots?on_conflict=user_id,snapshot_date', {
+    method: 'POST',
+    prefer: 'resolution=merge-duplicates,return=representation',
+    body: snapshotRow(normalized),
+  });
+  await saveBehaviorToCloud(normalized.context, normalized.date, normalized.source || 'manual', savedSnapshot?.id || null);
+  await saveRecommendationToCloud(savedSnapshot, normalized);
+  return savedSnapshot;
+}
+
+async function saveMentorMessageToCloud(role, content, detail = '') {
+  if (!accountPersistenceAvailable()) return false;
+  await supabaseRest('mentor_messages', {
+    method: 'POST',
+    prefer: 'return=minimal',
+    body: {
+      user_id: currentUser.id,
+      snapshot_date: currentSnapshot?.date || null,
+      role,
+      content,
+      detail: detail ? { text: detail } : {},
+    },
+  });
+  return true;
+}
+
+function enqueueCloudSync(label, operation) {
+  if (!accountPersistenceAvailable()) return Promise.resolve(false);
+  cloudSyncQueue = cloudSyncQueue
+    .catch(() => undefined)
+    .then(async () => {
+      elements.accountSyncTitle.textContent = label;
+      elements.accountSyncStatus.textContent = 'Saving to Supabase...';
+      const result = await operation();
+      elements.accountSyncTitle.textContent = 'Synced';
+      elements.accountSyncStatus.textContent = `Saved ${new Date().toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+      })}.`;
+      return result;
+    })
+    .catch(error => {
+      console.error('Supabase sync failed:', error);
+      elements.accountSyncTitle.textContent = 'Sync needs attention';
+      elements.accountSyncStatus.textContent = error.message || 'Could not save to Supabase.';
+      return false;
+    });
+  return cloudSyncQueue;
+}
+
+function scheduleBehaviorAutosave(source = 'manual') {
+  if (!accountPersistenceAvailable()) return;
+  clearTimeout(behaviorAutosaveTimer);
+  behaviorAutosaveTimer = setTimeout(() => {
+    void enqueueCloudSync('Autosaving behavior', () =>
+      saveBehaviorToCloud(collectContext(), workspaceDate, source));
+  }, 800);
+}
+
+async function loadCloudWorkspace() {
+  if (!accountPersistenceAvailable()) return false;
+  elements.accountSyncTitle.textContent = 'Loading account';
+  elements.accountSyncStatus.textContent = 'Restoring snapshots, trends, and mentor history...';
+  const snapshotQuery = [
+    'select=*',
+    'order=snapshot_date.asc',
+    'limit=365',
+  ].join('&');
+  const messageQuery = [
+    'select=*',
+    'order=created_at.asc',
+    'limit=120',
+  ].join('&');
+  const [snapshotRows, messageRows] = await Promise.all([
+    supabaseRest(`snapshots?${snapshotQuery}`, { method: 'GET' }, 12000),
+    supabaseRest(`mentor_messages?${messageQuery}`, { method: 'GET' }, 12000),
+  ]);
+
+  snapshots = Core.uniqueSnapshots((snapshotRows || []).map(rowToSnapshot));
+  refreshHistoryView();
+  workspaceDate = localDateKey();
+  const latestSnapshot = snapshots.find(snapshot => snapshot.date === workspaceDate) || snapshots.at(-1);
+  activateSnapshot(latestSnapshot || Core.createDailySnapshot({ date: workspaceDate }));
+  chatHistory = (messageRows || []).map(mentorMessageFromRow).slice(-40);
+
+  populateContext(currentContext);
+  renderOverview(currentSnapshot);
+  renderTrends();
+  elements.chatLog.querySelectorAll('.chat-message:not(:first-child)').forEach(message => message.remove());
+  chatHistory.slice(-12).forEach(message => {
+    addChatMessage(message.role, message.text, message.detail || '');
+  });
+  await storageSet({
+    [STORAGE_KEYS.snapshots]: snapshots,
+    [STORAGE_KEYS.chat]: chatHistory,
+    [STORAGE_KEYS.workspaceOwner]: currentUser.id,
+  });
+  elements.accountSyncTitle.textContent = 'Supabase connected';
+  elements.accountSyncStatus.textContent = snapshots.length
+    ? `${snapshots.length} saved snapshot${snapshots.length === 1 ? '' : 's'} restored.`
+    : 'Your account is ready. New snapshots will save automatically.';
+  return true;
+}
+
+async function restoreSupabaseAccountSession(storedSession) {
+  if (!supabaseConfigured() || !storedSession?.access_token) return false;
+  try {
+    let session = normalizeSupabaseSession(storedSession);
+    await persistSupabaseSession(session);
+    const expiresSoon = session.expires_at * 1000 - Date.now() < 60_000;
+    let user = null;
+    if (expiresSoon && session.refresh_token) {
+      const refreshed = await refreshSupabaseSession(session);
+      session = refreshed.session;
+      user = refreshed.user;
+    }
+    user ||= await getSupabaseUser();
+    await startAccountSession(session.access_token, user, { source: 'supabase' });
+    return true;
+  } catch (error) {
+    console.error('Supabase session restore failed:', error);
+    await clearSupabaseSession();
+    return false;
+  }
+}
+
 function setAuthStatus(message = '', tone = '') {
   elements.authStatus.textContent = message;
   elements.authStatus.className = `auth-status ${tone}`.trim();
@@ -758,6 +1234,12 @@ function setAuthMode(mode) {
   elements.showSignup.classList.toggle('active', !login);
   elements.showLogin.setAttribute('aria-selected', String(login));
   elements.showSignup.setAttribute('aria-selected', String(!login));
+  if (elements.forgotPasswordButton) {
+    elements.forgotPasswordButton.disabled = false;
+    elements.forgotPasswordButton.title = supabaseConfigured()
+      ? 'Send a Supabase password reset email'
+      : 'Add Supabase URL and anon key to config.js to enable password reset';
+  }
   setAuthStatus();
   (login ? elements.loginEmail : elements.signupEmail).focus();
 }
@@ -766,6 +1248,7 @@ function setAuthLoading(loading, mode) {
   elements.loginButton.disabled = loading;
   elements.signupButton.disabled = loading;
   elements.offlineButton.disabled = loading;
+  if (elements.forgotPasswordButton) elements.forgotPasswordButton.disabled = loading;
   if (mode === 'login') {
     elements.loginButton.textContent = loading ? 'Checking your account...' : 'Enter NeuroMentor';
   }
@@ -933,8 +1416,10 @@ function renderAccount() {
       : 'NeuroMentor account';
     elements.accountEmail.textContent = currentUser.email;
     elements.accountMemberSince.textContent = memberSince;
-    elements.accountSyncTitle.textContent = 'Account connected';
-    elements.accountSyncStatus.textContent = 'New analyses sync to your private account.';
+    elements.accountSyncTitle.textContent = supabaseConfigured() ? 'Supabase connected' : 'Account connected';
+    elements.accountSyncStatus.textContent = supabaseConfigured()
+      ? 'Snapshots, behavior data, and mentor messages save automatically.'
+      : 'New analyses sync to your private account.';
     elements.accountAction.textContent = 'Log out';
     elements.accountAction.dataset.action = 'logout';
   } else {
@@ -1026,13 +1511,18 @@ async function savePasswordChange() {
   elements.savePassword.textContent = 'Updating...';
   setPasswordStatus('Updating your password...', '');
   try {
-    await requestAuth('/auth/password', {
-      method: 'PATCH',
-      body: JSON.stringify({
-        current_password: currentPassword,
-        new_password: newPassword,
-      }),
-    });
+    if (supabaseConfigured()) {
+      await loginWithSupabase(currentUser.email, currentPassword);
+      await updateSupabasePassword(newPassword);
+    } else {
+      await requestAuth('/auth/password', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          current_password: currentPassword,
+          new_password: newPassword,
+        }),
+      });
+    }
     elements.currentPassword.value = '';
     elements.newPassword.value = '';
     elements.confirmNewPassword.value = '';
@@ -1053,6 +1543,10 @@ function showAuthView(message = '') {
   elements.authView.classList.remove('hidden');
   setAuthMode('login');
   if (message) setAuthStatus(message, 'error');
+  else if (pendingAuthStatus) {
+    setAuthStatus(pendingAuthStatus.message, pendingAuthStatus.tone);
+    pendingAuthStatus = null;
+  }
 }
 
 function showWorkspace() {
@@ -1093,7 +1587,7 @@ async function claimWorkspace(owner) {
   await storageSet({ [STORAGE_KEYS.workspaceOwner]: owner });
 }
 
-async function startAccountSession(token, user) {
+async function startAccountSession(token, user, options = {}) {
   const previousMode = appMode;
   authToken = token;
   currentUser = user;
@@ -1104,12 +1598,17 @@ async function startAccountSession(token, user) {
     [STORAGE_KEYS.authUser]: user,
     [STORAGE_KEYS.appMode]: 'account',
   });
-  if (previousMode === 'offline') {
+  if (options.source === 'supabase') {
+    await ensureSupabaseProfile(user).catch(error => {
+      console.warn('Could not ensure Supabase profile:', error);
+    });
+    await loadCloudWorkspace();
+  } else if (previousMode === 'offline') {
     const accountWorkspace = await persistentStorageGet(WORKSPACE_STORAGE_KEYS);
     await restoreWorkspaceState(accountWorkspace);
   }
   showWorkspace();
-  setEngineStatus('cloud');
+  setEngineStatus(options.source === 'supabase' ? 'local' : 'cloud');
   await loadReminderSettings();
 }
 
@@ -1128,6 +1627,28 @@ async function handleAuthentication(mode) {
   setAuthStatus(signingUp ? 'Creating your private workspace...' : 'Restoring your workspace...');
 
   try {
+    if (supabaseConfigured()) {
+      const authResult = signingUp
+        ? await signUpWithSupabase(email, password)
+        : await loginWithSupabase(email, password);
+
+      if (!authResult.session) {
+        setAuthStatus(
+          'Check your email to confirm this account, then come back and log in.',
+          'success',
+        );
+        return;
+      }
+
+      await persistSupabaseSession(authResult.session);
+      const user = authResult.user || await getSupabaseUser();
+      await startAccountSession(authResult.session.access_token, user, { source: 'supabase' });
+      setAuthStatus();
+      elements.loginForm.reset();
+      elements.signupForm.reset();
+      return;
+    }
+
     const payload = signingUp
       ? { email, password, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' }
       : { email, password };
@@ -1165,11 +1686,36 @@ async function handleAuthentication(mode) {
   }
 }
 
+async function handleForgotPassword() {
+  const email = (elements.loginEmail?.value || elements.signupEmail?.value || '').trim();
+  if (!email) {
+    setAuthStatus('Enter your email first, then request a reset link.', 'error');
+    elements.loginEmail?.focus();
+    return;
+  }
+  if (!supabaseConfigured()) {
+    setAuthStatus('Password reset requires Supabase config in config.js.', 'error');
+    return;
+  }
+  setAuthLoading(true, 'login');
+  setAuthStatus('Sending password reset email...');
+  try {
+    await sendSupabasePasswordReset(email);
+    setAuthStatus('Password reset email sent. Check your inbox and spam folder.', 'success');
+  } catch (error) {
+    setAuthStatus(error.message || 'Could not send password reset email.', 'error');
+  } finally {
+    setAuthLoading(false, 'login');
+  }
+}
+
 async function continueOffline() {
   authToken = null;
+  supabaseSession = null;
   currentUser = null;
   accountDeviceId = null;
   appMode = 'offline';
+  await clearSupabaseSession();
   await sessionDataRemove(WORKSPACE_STORAGE_KEYS);
   await resetWorkspaceData();
   await storageSet({ [STORAGE_KEYS.appMode]: 'offline' });
@@ -1186,21 +1732,35 @@ async function continueOffline() {
 }
 
 async function logout() {
+  if (supabaseConfigured() && authToken) {
+    try {
+      await supabaseAuth('/logout', { method: 'POST' }, 6000);
+    } catch (error) {
+      console.warn('Supabase logout failed:', error);
+    }
+  }
   authToken = null;
+  supabaseSession = null;
   currentUser = null;
   accountDeviceId = null;
   await storageRemove([
     STORAGE_KEYS.authToken,
     STORAGE_KEYS.authUser,
+    STORAGE_KEYS.supabaseSession,
     STORAGE_KEYS.appMode,
     STORAGE_KEYS.deviceId,
     STORAGE_KEYS.devicePlatform,
   ]);
+  await clearSupabaseSession();
   reminderSettings = { ...DEFAULT_REMINDER };
   showAuthView('You have been logged out.');
 }
 
 async function restoreAccountSession(token, cachedUser) {
+  if (supabaseConfigured()) {
+    const restored = await restoreSupabaseAccountSession(supabaseSession || { access_token: token });
+    return restored;
+  }
   authToken = token;
   currentUser = cachedUser || null;
 
@@ -1262,6 +1822,11 @@ async function ensureAccountDevice() {
 
 async function syncUsageToAccount(usage) {
   if (appMode !== 'account' || !authToken) return false;
+
+  if (supabaseConfigured()) {
+    return enqueueCloudSync('Syncing behavior', () =>
+      saveBehaviorToCloud({ ...currentContext, usage }, currentSnapshot?.date || workspaceDate, 'analysis'));
+  }
 
   try {
     elements.accountSyncTitle.textContent = 'Syncing today';
@@ -2026,6 +2591,8 @@ async function handleMentorQuestion(question) {
   if (!cleaned) return;
 
   addChatMessage('user', cleaned);
+  void enqueueCloudSync('Saving mentor message', () =>
+    saveMentorMessageToCloud('user', cleaned));
   elements.mentorQuestion.value = '';
   const response = await requestMentorResponse(cleaned);
   const evidence = (response.evidence || [])[0];
@@ -2038,6 +2605,8 @@ async function handleMentorQuestion(question) {
     nextStep ? `${labels.nextStep}: ${nextStep}` : '',
   ].filter(Boolean).join(' ');
   addChatMessage('mentor', response.answer, detail);
+  void enqueueCloudSync('Saving mentor response', () =>
+    saveMentorMessageToCloud('mentor', response.answer, detail));
 
   chatHistory.push({ role: 'user', text: cleaned }, { role: 'mentor', text: response.answer, detail });
   chatHistory = chatHistory.slice(-20);
@@ -2404,6 +2973,7 @@ function updateExtractionItem(event) {
         : `${Math.round(item.confidence * 100)}% extraction confidence`;
   }
   elements.applyExtraction.textContent = 'Apply reviewed values';
+  scheduleBehaviorAutosave('screenshot-review');
 }
 
 function applyExtractedValues() {
@@ -2441,6 +3011,8 @@ function applyExtractedValues() {
   renderExtractionReview();
   renderValidation(Core.validateContext(collectContext()));
   setOcrStatus('Reviewed screenshot values have been applied. You can still edit category totals.', 'success');
+  void enqueueCloudSync('Saving reviewed screenshot', () =>
+    saveBehaviorToCloud(collectContext(), workspaceDate, 'screenshot-review'));
 }
 
 function removeScreenshot() {
@@ -2525,6 +3097,8 @@ async function processScreenshot(file) {
         : `Detected ${matches.length} apps and filled their usage times automatically. Review before applying.`,
       needsCategory ? 'warning' : 'success',
     );
+    void enqueueCloudSync('Saving screenshot draft', () =>
+      saveBehaviorToCloud(collectContext(), workspaceDate, 'screenshot-upload'));
   } catch (error) {
     console.error('Screenshot OCR failed:', error);
     extractionState = {
@@ -2542,6 +3116,12 @@ async function processScreenshot(file) {
 
 async function handleAnalysisSubmit(event) {
   event.preventDefault();
+  if (supabaseConfigured() && appMode !== 'account') {
+    elements.analysisStatus.textContent =
+      'Create a free account to save your cognitive history and track long-term trends.';
+    elements.analysisStatus.className = 'form-status warning';
+    return;
+  }
   await rolloverWorkspaceDay();
   currentContext = collectContext();
   const validation = renderValidation(Core.validateContext(currentContext));
@@ -2568,6 +3148,9 @@ async function handleAnalysisSubmit(event) {
     upsertHistoryEntry(currentPrediction, currentContext);
     workspaceDate = localDateKey();
     await persistSnapshots();
+    const cloudSaved = accountPersistenceAvailable()
+      ? await enqueueCloudSync('Saving snapshot', () => saveSnapshotToCloud(currentSnapshot))
+      : false;
     if (appMode === 'account') {
       renderReminderSettings('Today is complete. The email reminder will be skipped.');
     }
@@ -2576,10 +3159,12 @@ async function handleAnalysisSubmit(event) {
     void syncUsageToAccount(currentContext.usage);
     elements.analysisStatus.textContent = appMode === 'offline'
       ? 'Snapshot saved for this tab. Closing the tab resets offline data.'
-      : currentPrediction.source === 'cloud'
+      : cloudSaved
+        ? 'Snapshot saved to your account. Dashboard and Trends are up to date.'
+        : currentPrediction.source === 'cloud'
         ? 'Snapshot saved successfully and analyzed with the API.'
-        : 'Snapshot saved locally. The analysis API is not configured or unavailable.';
-    elements.analysisStatus.className = `form-status ${currentPrediction.source === 'cloud' ? 'success' : 'warning'}`;
+        : 'Snapshot saved locally. Connect Supabase to persist this across devices.';
+    elements.analysisStatus.className = `form-status ${cloudSaved || currentPrediction.source === 'cloud' ? 'success' : 'warning'}`;
     switchScreen('overview');
   } catch (error) {
     console.error('Snapshot save failed:', error);
@@ -2602,6 +3187,7 @@ function bindEvents() {
     event.preventDefault();
     handleAuthentication('signup');
   });
+  elements.forgotPasswordButton?.addEventListener('click', () => void handleForgotPassword());
   elements.offlineButton?.addEventListener('click', continueOffline);
   elements.accountButton?.addEventListener('click', () => {
     if (elements.accountPanel.classList.contains('hidden')) openAccountPanel();
@@ -2643,6 +3229,7 @@ function bindEvents() {
   elements.analysisForm?.addEventListener('submit', handleAnalysisSubmit);
   elements.analysisForm?.addEventListener('input', () => {
     renderValidation(Core.validateContext(collectContext()), false);
+    scheduleBehaviorAutosave('manual-edit');
   });
   elements.mentorForm?.addEventListener('submit', event => {
     event.preventDefault();
@@ -2748,7 +3335,8 @@ async function initialize() {
   setAuthMode('login');
 
   const persistentStored = await persistentStorageGet(Object.values(STORAGE_KEYS));
-  const storedToken = persistentStored[STORAGE_KEYS.authToken];
+  const storedSupabaseSession = persistentStored[STORAGE_KEYS.supabaseSession];
+  const storedToken = storedSupabaseSession?.access_token || persistentStored[STORAGE_KEYS.authToken];
   const restoringOffline = !storedToken && persistentStored[STORAGE_KEYS.appMode] === 'offline';
   appMode = restoringOffline ? 'offline' : 'signed-out';
   const offlineWorkspace = restoringOffline
@@ -2773,7 +3361,18 @@ async function initialize() {
   setupReminderTimeOptions();
   renderReminderSettings();
 
-  if (storedToken) {
+  if (await consumeSupabaseRedirectSession()) {
+    return;
+  }
+
+  if (supabaseConfigured() && storedSupabaseSession) {
+    setAuthStatus('Restoring your Supabase account...');
+    const restored = await restoreSupabaseAccountSession(storedSupabaseSession);
+    if (!restored) showAuthView('Your Supabase session expired. Please log in again.');
+    return;
+  }
+
+  if (storedToken && !supabaseConfigured()) {
     setAuthStatus('Restoring your account...');
     const restored = await restoreAccountSession(storedToken, stored[STORAGE_KEYS.authUser]);
     if (!restored) showAuthView('Your session expired. Please log in again.');
