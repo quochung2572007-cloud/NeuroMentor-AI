@@ -1033,7 +1033,7 @@ async function getSupabaseUser() {
 
 async function ensureSupabaseProfile(user = currentUser) {
   if (!accountPersistenceAvailable() || !user?.id) return;
-  await supabaseRest('users?on_conflict=id', {
+  await supabaseRest('profiles?on_conflict=id', {
     method: 'POST',
     prefer: 'resolution=merge-duplicates,return=minimal',
     body: {
@@ -1111,7 +1111,6 @@ function behaviorRowFromContext(context, date = localDateKey(), source = 'manual
     app_switches: safeContext.app_switches || 0,
     late_night_minutes: safeContext.late_night_minutes || 0,
     deep_work_minutes: safeContext.deep_work_minutes || 0,
-    app_launches: safeContext.launch_count || safeContext.app_launches || 0,
     reported_total_minutes: safeContext.reported_total_minutes ?? null,
     source,
     extraction: extractionState || {},
@@ -1167,29 +1166,12 @@ function mentorMessageFromRow(row) {
 async function saveBehaviorToCloud(context = collectContext(), date = workspaceDate, source = 'manual', snapshotId = null) {
   if (!accountPersistenceAvailable()) return false;
   const row = behaviorRowFromContext(context, date, source, snapshotId);
-  await supabaseRest('behavior_data?on_conflict=user_id,snapshot_date', {
+  await supabaseRest('behavior_metrics?on_conflict=user_id,snapshot_date', {
     method: 'POST',
     prefer: 'resolution=merge-duplicates,return=minimal',
     body: row,
   });
   return true;
-}
-
-async function saveRecommendationToCloud(snapshotRowResult, snapshot) {
-  const action = snapshot.result.primary_action;
-  if (!action?.action) return;
-  await supabaseRest('recommendations?on_conflict=user_id,snapshot_date,title', {
-    method: 'POST',
-    prefer: 'resolution=merge-duplicates,return=minimal',
-    body: {
-      user_id: currentUser.id,
-      snapshot_id: snapshotRowResult?.id || null,
-      snapshot_date: snapshot.date,
-      title: action.title || 'Primary recommendation',
-      action: action.action,
-      reason: action.reason || '',
-    },
-  });
 }
 
 async function saveSnapshotToCloud(snapshot = currentSnapshot) {
@@ -1201,7 +1183,6 @@ async function saveSnapshotToCloud(snapshot = currentSnapshot) {
     body: snapshotRow(normalized),
   });
   await saveBehaviorToCloud(normalized.context, normalized.date, normalized.source || 'manual', savedSnapshot?.id || null);
-  await saveRecommendationToCloud(savedSnapshot, normalized);
   return savedSnapshot;
 }
 

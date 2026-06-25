@@ -13,7 +13,7 @@ NeuroMentor turns daily screen-time metadata into explainable estimates for:
 This repository contains a responsive web app, a Chrome extension using the same interface, a
 Supabase-backed persistence layer, and an optional FastAPI backend. Both clients still work locally
 without an account or server. When Supabase is configured, signed-in users keep their snapshots,
-behavior data, trends, recommendations, and mentor history across browsers and devices.
+behavior metrics, trends, and mentor history across browsers and devices.
 
 ## MVP Features
 
@@ -75,8 +75,8 @@ performance and offline tolerance; account data is restored from Supabase after 
 1. Create a Supabase project at <https://supabase.com/dashboard/projects>.
 2. Open **SQL Editor** in Supabase.
 3. Paste and run `supabase/migrations/001_neurommentor_persistence.sql`.
-4. Confirm these tables exist: `users`, `snapshots`, `behavior_data`, `mentor_messages`, and
-   `recommendations`.
+4. Confirm these tables exist: `profiles`, `snapshots`, `behavior_metrics`, and
+   `mentor_messages`.
 
 The migration enables Row Level Security so each user can only read or write their own records.
 Supabase Auth stores passwords and password hashes internally in `auth.users`; NeuroMentor does not
@@ -121,7 +121,7 @@ After this is configured:
 
 - Sign-up logs the user in automatically when email confirmation is disabled.
 - Login loads the latest snapshot, trend history, personal baseline, and mentor messages.
-- Generating a cognitive snapshot automatically saves the snapshot, behavior data, and recommendation.
+- Generating a cognitive snapshot automatically saves the snapshot and behavior metrics.
 - Sending a Mentor message automatically saves both the user message and Mentor response.
 - Updating extracted or manual behavior values automatically syncs the latest daily behavior row.
 
@@ -190,6 +190,10 @@ The checked-in `.gitignore` excludes the local database and `backend/.env`.
 5. Deploy without a build command; `vercel.json` serves the static app and `/api/config` exposes the
    public runtime auth config.
 6. Open `https://neuro-mentor-ai.vercel.app`.
+7. Verify `https://neuro-mentor-ai.vercel.app/api/config` returns `"authProvider":"supabase"`.
+
+`git push` deploys code, but it does not create Vercel environment variables. If `/api/config`
+returns `"authProvider":"unconfigured"`, add the Supabase variables in Vercel and redeploy.
 
 If either generated hostname changes, update `config.js`, Supabase redirect URLs, `render.yaml`, and
 the Render `APP_PUBLIC_URL` / `CORS_ALLOWED_ORIGINS` values, then redeploy.
@@ -264,7 +268,7 @@ reminders.
 
 - Registration uses email and a password of at least eight characters.
 - The app stores the Supabase session in browser storage and restores it when reopened.
-- New analyses are saved automatically to `snapshots`, `behavior_data`, and `recommendations`.
+- New analyses are saved automatically to `snapshots` and `behavior_metrics`.
 - Mentor chat saves both user and mentor messages to `mentor_messages`.
 - The account menu in the top-right corner shows connection status and provides logout.
 - If Supabase is not configured or becomes unavailable, users can continue with offline local analysis.
@@ -328,9 +332,9 @@ Responsive Web App
   +-- Vercel static hosting
   |
   +-- Supabase Auth + Postgres
-        |-- Row-level-secured users
-        |-- Snapshots and behavior data
-        |-- Mentor messages and recommendations
+        |-- Row-level-secured profiles
+        |-- Snapshots and behavior metrics
+        |-- Mentor messages
   |
   +-- Render FastAPI /v1
         |-- Pure shared scoring rules with browser parity fixtures
