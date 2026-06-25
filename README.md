@@ -102,7 +102,7 @@ If your Vercel project uses a different domain, add that exact domain too.
 
 ### 3. Connect The Frontend
 
-Open `config.js` and fill in your public Supabase project URL and anon key:
+For local development, open `config.js` and fill in your public Supabase project URL and anon key:
 
 ```js
 globalThis.NEUROMENTOR_CONFIG = Object.freeze({
@@ -124,6 +124,17 @@ After this is configured:
 - Generating a cognitive snapshot automatically saves the snapshot, behavior data, and recommendation.
 - Sending a Mentor message automatically saves both the user message and Mentor response.
 - Updating extracted or manual behavior values automatically syncs the latest daily behavior row.
+
+For Vercel production, set these environment variables instead of hard-coding secrets in the repo:
+
+```text
+SUPABASE_URL=https://YOUR_PROJECT.supabase.co
+SUPABASE_ANON_KEY=YOUR_PUBLIC_ANON_KEY
+NEUROMENTOR_API_ROOT=https://neurommentor-api-khaivan2210.onrender.com/v1
+```
+
+The frontend reads them from `/api/config` at startup. `SUPABASE_SERVICE_ROLE_KEY` is not required
+by the browser app and must not be exposed through Vercel client code.
 
 ## Production Deployment
 
@@ -174,8 +185,11 @@ The checked-in `.gitignore` excludes the local database and `backend/.env`.
 1. Import the same GitHub repository at <https://vercel.com/new>.
 2. Set the project name to `neuro-mentor-ai`.
 3. Select **Other** as the framework preset and leave the root directory as the repository root.
-4. Deploy without a build command; `vercel.json` serves the static app.
-5. Open `https://neuro-mentor-ai.vercel.app`.
+4. Add `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and optionally `NEUROMENTOR_API_ROOT` in
+   **Project Settings > Environment Variables**.
+5. Deploy without a build command; `vercel.json` serves the static app and `/api/config` exposes the
+   public runtime auth config.
+6. Open `https://neuro-mentor-ai.vercel.app`.
 
 If either generated hostname changes, update `config.js`, Supabase redirect URLs, `render.yaml`, and
 the Render `APP_PUBLIC_URL` / `CORS_ALLOWED_ORIGINS` values, then redeploy.
@@ -368,6 +382,7 @@ also set `CORS_ALLOWED_ORIGINS` and disable `AUTO_CREATE_TABLES` after migration
 - `core.js` - Versioned snapshots, pure calculations, validation, trends, and deterministic Mentor logic
 - `runtime.js` - Web/extension runtime detection
 - `config.js` - Local and production API routing plus Supabase client configuration
+- `api/config.js` - Vercel runtime config endpoint for public Supabase and API settings
 - `supabase/migrations/001_neurommentor_persistence.sql` - Supabase Auth, tables, indexes, triggers, and RLS policies
 - `vercel.json` - Vercel static hosting and security headers
 - `render.yaml` - Render API, cron job, and PostgreSQL Blueprint

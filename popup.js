@@ -1,9 +1,11 @@
-const API_ROOT = globalThis.NEUROMENTOR_CONFIG?.apiRoot || 'http://localhost:8000/v1';
-const API_BASE = `${API_ROOT}/intelligence`;
+let API_ROOT = globalThis.NEUROMENTOR_CONFIG?.apiRoot || 'http://localhost:8000/v1';
+let API_BASE = `${API_ROOT}/intelligence`;
 const SUPABASE_CONFIG = globalThis.NEUROMENTOR_CONFIG?.supabase || {};
+const RUNTIME_CONFIG_PATH = globalThis.NEUROMENTOR_CONFIG?.runtimeConfigPath || '/api/config';
 const APP_LOCALE = 'en-US';
 const TREND_HISTORY_DAYS = 30;
 const Core = globalThis.NeuroMentorCore;
+const AUTH_DEBUG_ENABLED = true;
 
 if (!Core) {
   throw new Error('NeuroMentor shared core failed to load.');
@@ -263,6 +265,43 @@ let themePreference = 'light';
 let cloudSyncQueue = Promise.resolve();
 let behaviorAutosaveTimer = null;
 let pendingAuthStatus = null;
+
+function maskDebugEmail(email) {
+  const [name = '', domain = ''] = String(email || '').split('@');
+  if (!name || !domain) return '';
+  return `${name.slice(0, 2)}***@${domain}`;
+}
+
+function redactDebugValue(key, value) {
+  if (/password|token|secret|key|authorization/i.test(key)) {
+    if (!value) return value;
+    return '<redacted>';
+  }
+  if (/email/i.test(key)) return maskDebugEmail(value);
+  return value;
+}
+
+function redactDebugDetails(details = {}) {
+  return Object.fromEntries(
+    Object.entries(details).map(([key, value]) => [key, redactDebugValue(key, value)]),
+  );
+}
+
+function authDebug(event, details = {}) {
+  if (!AUTH_DEBUG_ENABLED) return;
+  console.info('[NeuroMentor auth]', event, redactDebugDetails(details));
+}
+
+function isLocalHost() {
+  return ['localhost', '127.0.0.1'].includes(window.location.hostname);
+}
+
+function updateApiRoot(apiRoot) {
+  const nextRoot = String(apiRoot || '').replace(/\/+$/, '');
+  if (!nextRoot) return;
+  API_ROOT = nextRoot;
+  API_BASE = `${API_ROOT}/intelligence`;
+}
 
 function emptyUsage() {
   return Object.fromEntries(CATEGORIES.map(category => [category, 0]));
@@ -765,8 +804,55 @@ function supabaseConfigured() {
     && !anonKey.includes('REPLACE_');
 }
 
+function backendAuthFallbackAllowed() {
+  return isLocalHost() && !supabaseConfigured();
+}
+
+function authConfigurationMessage() {
+  if (supabaseConfigured()) return '';
+  return isLocalHost()
+    ? 'Supabase is not configured. Local login can still use the FastAPI backend if it is running.'
+    : 'Authentication is not configured. Set SUPABASE_URL and SUPABASE_ANON_KEY in Vercel, then redeploy.';
+}
+
 function accountPersistenceAvailable() {
   return appMode === 'account' && Boolean(currentUser?.id && authToken) && supabaseConfigured();
+}
+
+async function loadRuntimeConfig() {
+  const shouldLoadRemoteConfig = !isLocalHost();
+  if (!shouldLoadRemoteConfig) {
+    authDebug('runtime config skipped for local host', { apiRoot: API_ROOT });
+    return;
+  }
+  try {
+    authDebug('runtime config request', { path: RUNTIME_CONFIG_PATH });
+    const response = await fetchWithTimeout(RUNTIME_CONFIG_PATH, {
+      method: 'GET',
+      cache: 'no-store',
+      headers: { Accept: 'application/json' },
+    }, 6000);
+    if (!response.ok) {
+      authDebug('runtime config failed', { status: response.status });
+      return;
+    }
+    const config = await response.json();
+    updateApiRoot(config.apiRoot);
+    if (config.supabase && typeof config.supabase === 'object') {
+      Object.assign(SUPABASE_CONFIG, {
+        url: config.supabase.url || SUPABASE_CONFIG.url || '',
+        anonKey: config.supabase.anonKey || SUPABASE_CONFIG.anonKey || '',
+      });
+    }
+    authDebug('runtime config loaded', {
+      apiRoot: API_ROOT,
+      authProvider: supabaseConfigured() ? 'supabase' : config.authProvider || 'unconfigured',
+      supabaseUrl: cleanSupabaseUrl(),
+      hasAnonKey: Boolean(SUPABASE_CONFIG.anonKey),
+    });
+  } catch (error) {
+    authDebug('runtime config unavailable', { message: error.message || String(error) });
+  }
 }
 
 function supabaseRedirectUrl() {
@@ -839,7 +925,17 @@ async function readSupabaseError(response) {
     : 'The Supabase request could not be completed.';
   try {
     const body = await response.json();
-    return body.error_description || body.msg || body.message || body.error || fallback;
+    const message = body.error_description || body.msg || body.message || body.error || fallback;
+    if (/already registered|already exists|user already/i.test(message)) {
+      return 'Email already exists. Try logging in instead.';
+    }
+    if (/password/i.test(message) && /6|8|characters|short/i.test(message)) {
+      return 'Password must contain at least 8 characters.';
+    }
+    if (/invalid login|invalid credentials/i.test(message)) {
+      return 'Invalid email or password.';
+    }
+    return message;
   } catch {
     return fallback;
   }
@@ -868,7 +964,11 @@ async function supabaseRequest(path, options = {}, timeoutMs = 9000) {
   }, timeoutMs);
 
   if (!response.ok) {
-    throw new Error(await readSupabaseError(response));
+    const error = new Error(await readSupabaseError(response));
+    error.status = response.status;
+    error.provider = 'supabase';
+    authDebug('supabase request failed', { path, status: response.status, message: error.message });
+    throw error;
   }
   if (response.status === 204) return null;
   const text = await response.text();
@@ -1260,13 +1360,31 @@ function setAuthLoading(loading, mode) {
 async function readApiError(response) {
   try {
     const body = await response.json();
-    if (typeof body.detail === 'string') return body.detail;
-    if (Array.isArray(body.detail)) return body.detail[0]?.msg || 'Please check the form and try again.';
+    if (typeof body.detail === 'string') {
+      if (/already/i.test(body.detail)) return 'Email already exists. Try logging in instead.';
+      if (/invalid credentials/i.test(body.detail)) return 'Invalid email or password.';
+      return body.detail;
+    }
+    if (Array.isArray(body.detail)) {
+      const first = body.detail[0] || {};
+      const location = Array.isArray(first.loc) ? first.loc.join('.') : '';
+      if (location.includes('password') && /8|short|least/i.test(first.msg || '')) {
+        return 'Password must contain at least 8 characters.';
+      }
+      if (location.includes('email')) return 'Enter a valid email address.';
+      return first.msg || 'Please check the form and try again.';
+    }
   } catch {
     // Use the status-based fallback below.
   }
+  if (response.status === 404) {
+    return 'Authentication endpoint not found. Check the production API URL or redeploy the backend.';
+  }
+  if (response.status === 409) return 'Email already exists. Try logging in instead.';
+  if (response.status === 401) return 'Invalid email or password.';
+  if (response.status === 422) return 'Please check the email and password requirements.';
   return response.status >= 500
-    ? 'The NeuroMentor server is unavailable right now.'
+    ? 'Authentication server is unavailable. Check backend logs and database connection.'
     : 'The request could not be completed.';
 }
 
@@ -1279,6 +1397,9 @@ async function requestAuth(path, options = {}, timeoutMs = 6000) {
   if (!response.ok) {
     const error = new Error(await readApiError(response));
     error.status = response.status;
+    error.provider = 'fastapi';
+    error.path = path;
+    authDebug('backend request failed', { path, status: response.status, message: error.message });
     throw error;
   }
 
@@ -1623,10 +1744,27 @@ async function handleAuthentication(mode) {
     return;
   }
 
+  if (!supabaseConfigured() && !backendAuthFallbackAllowed()) {
+    const message = authConfigurationMessage();
+    authDebug('auth blocked by missing production config', {
+      mode,
+      apiRoot: API_ROOT,
+      supabaseUrl: cleanSupabaseUrl(),
+      hasAnonKey: Boolean(SUPABASE_CONFIG.anonKey),
+    });
+    setAuthStatus(message, 'error');
+    return;
+  }
+
   setAuthLoading(true, mode);
   setAuthStatus(signingUp ? 'Creating your private workspace...' : 'Restoring your workspace...');
 
   try {
+    authDebug(signingUp ? 'signup request started' : 'login request started', {
+      provider: supabaseConfigured() ? 'supabase' : 'fastapi',
+      email,
+      apiRoot: API_ROOT,
+    });
     if (supabaseConfigured()) {
       const authResult = signingUp
         ? await signUpWithSupabase(email, password)
@@ -1643,6 +1781,11 @@ async function handleAuthentication(mode) {
       await persistSupabaseSession(authResult.session);
       const user = authResult.user || await getSupabaseUser();
       await startAccountSession(authResult.session.access_token, user, { source: 'supabase' });
+      authDebug(signingUp ? 'signup succeeded' : 'login succeeded', {
+        provider: 'supabase',
+        userId: user?.id,
+        email: user?.email,
+      });
       setAuthStatus();
       elements.loginForm.reset();
       elements.signupForm.reset();
@@ -1669,17 +1812,28 @@ async function handleAuthentication(mode) {
       };
     }
     await startAccountSession(tokenResponse.access_token, user);
+    authDebug(signingUp ? 'signup succeeded' : 'login succeeded', {
+      provider: 'fastapi',
+      userId: user?.id,
+      email: user?.email,
+    });
     setAuthStatus();
     elements.loginForm.reset();
     elements.signupForm.reset();
   } catch (error) {
     const connectionFailed = error.name === 'AbortError' || error instanceof TypeError;
-    const localHost = ['localhost', '127.0.0.1'].includes(window.location.hostname);
+    const localHost = isLocalHost();
     const message = connectionFailed
       ? localHost
         ? 'Cannot reach the local account server. Start the backend or continue offline.'
-        : 'The account service is not deployed or is temporarily unavailable. Continue offline or try again later.'
+        : 'Authentication server unavailable. Check Supabase/Vercel environment variables or backend deployment.'
       : error.message;
+    authDebug(signingUp ? 'signup failed' : 'login failed', {
+      provider: supabaseConfigured() ? 'supabase' : 'fastapi',
+      message,
+      status: error.status || '',
+      path: error.path || '',
+    });
     setAuthStatus(message, 'error');
   } finally {
     setAuthLoading(false, mode);
@@ -1694,7 +1848,7 @@ async function handleForgotPassword() {
     return;
   }
   if (!supabaseConfigured()) {
-    setAuthStatus('Password reset requires Supabase config in config.js.', 'error');
+    setAuthStatus(authConfigurationMessage(), 'error');
     return;
   }
   setAuthLoading(true, 'login');
@@ -3330,9 +3484,17 @@ async function restoreWorkspaceState(stored) {
 }
 
 async function initialize() {
+  await loadRuntimeConfig();
   bindEvents();
   bindSnapshotStorageSync();
   setAuthMode('login');
+  authDebug('auth initialization', {
+    host: window.location.hostname,
+    apiRoot: API_ROOT,
+    provider: supabaseConfigured() ? 'supabase' : backendAuthFallbackAllowed() ? 'fastapi-local' : 'unconfigured',
+    supabaseUrl: cleanSupabaseUrl(),
+    hasAnonKey: Boolean(SUPABASE_CONFIG.anonKey),
+  });
 
   const persistentStored = await persistentStorageGet(Object.values(STORAGE_KEYS));
   const storedSupabaseSession = persistentStored[STORAGE_KEYS.supabaseSession];

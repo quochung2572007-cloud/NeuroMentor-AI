@@ -6,6 +6,7 @@ const productionApiRoot = 'https://neurommentor-api-khaivan2210.onrender.com/v1'
 
 globalThis.NEUROMENTOR_CONFIG = Object.freeze({
   apiRoot: localHosts.has(currentHost) ? localApiRoot : productionApiRoot,
+  runtimeConfigPath: '/api/config',
   supabase: {
     // Project Settings > API. Use the public anon key only, never the service_role key.
     url: '',
