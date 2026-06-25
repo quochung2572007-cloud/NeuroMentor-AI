@@ -792,7 +792,10 @@ function apiHeaders(includeJson = true) {
 }
 
 function cleanSupabaseUrl() {
-  return String(SUPABASE_CONFIG.url || '').replace(/\/+$/, '');
+  return String(SUPABASE_CONFIG.url || '')
+    .trim()
+    .replace(/\/rest\/v1\/?$/i, '')
+    .replace(/\/+$/, '');
 }
 
 function supabaseConfigured() {
