@@ -1757,8 +1757,9 @@ async function handleAuthentication(mode) {
         : await loginWithSupabase(email, password);
 
       if (!authResult.session) {
+        if (signingUp) setAuthMode('login');
         setAuthStatus(
-          'Check your email to confirm this account, then come back and log in.',
+          'Account created. Log in with the same email and password to continue.',
           'success',
         );
         return;
